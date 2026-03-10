@@ -5,6 +5,11 @@
 </p>
 
 <p align="center">
+  <a href="https://dylan-upload.oss-cn-beijing.aliyuncs.com/assets/demo1.mp4">🎬 观看测试视频 (Demo Video)</a><br/>
+  <sup>（基于项目中内置的 <a href="./极简测试短片.txt">极简测试短片.txt</a> 样例生成）</sup>
+</p>
+
+<p align="center">
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-features">Features</a> •
   <a href="#%EF%B8%8F-configuration-guide">Configuration</a> •
