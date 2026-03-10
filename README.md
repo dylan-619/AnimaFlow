@@ -99,7 +99,7 @@
 ### 1. 克隆项目 / Clone
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/animaflow.git
+git clone https://github.com/dylan-619/AnimaFlow.git
 cd animaflow
 ```
 
