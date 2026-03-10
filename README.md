@@ -393,13 +393,3 @@ Per episode (~60s, ~12-15 shots):
 This project is licensed under the [MIT License](LICENSE).
 
 ---
-
-## 🔑 GitHub Topics
-
-建议在 GitHub 仓库设置中添加以下 Topics，以便其他用户搜索发现：
-
-```
-ai  ai-video  ai-image-generation  short-drama  anime  tts  text-to-video
-vue3  typescript  express  ffmpeg  volcengine  doubao  ai-tools
-content-creation  video-generation  storyboard  novel-to-video  animaflow
-```
