@@ -79,10 +79,19 @@
             <el-select v-model="row.defaultEmotion" size="small" placeholder="自动" style="width: 100px"
               @change="updateAsset(row)" clearable>
               <el-option value="" label="自动（calm）" />
-              <el-option value="calm" label="中性" />
-              <el-option value="happy" label="高兴" />
-              <el-option value="sad" label="悲伤" />
-              <el-option value="angry" label="愤怒" />
+              <el-option-group label="常用情绪">
+                <el-option value="calm" label="中性" />
+                <el-option value="happy" label="高兴" />
+                <el-option value="sad" label="悲伤" />
+                <el-option value="angry" label="愤怒" />
+              </el-option-group>
+              <el-option-group label="高级情绪">
+                <el-option value="fearful" label="害怕" />
+                <el-option value="surprised" label="惊讶" />
+                <el-option value="fluent" label="生动" />
+                <el-option value="whisper" label="低语" />
+                <el-option value="disgusted" label="厌恶" />
+              </el-option-group>
             </el-select>
           </template>
         </el-table-column>

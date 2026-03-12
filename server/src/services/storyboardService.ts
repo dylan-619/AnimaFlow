@@ -306,7 +306,8 @@ export async function storyboardHandler(task: Task, updateProgress: (p: number) 
                 // 1. AI 推断的情绪（shot.emotion）
                 // 2. 角色默认情绪（roleEmotionMap）
                 // 3. 默认 calm
-                if (shot.emotion && ['calm', 'happy', 'sad', 'angry'].includes(shot.emotion)) {
+                const validEmotions = ['calm', 'happy', 'sad', 'angry', 'fearful', 'surprised', 'fluent', 'whisper', 'disgusted'];
+                if (shot.emotion && validEmotions.includes(shot.emotion)) {
                     // 优先使用 AI 推断的情绪
                     dubbingEmotion = shot.emotion;
                 } else if (roleEmotionMap.has(speaker)) {
