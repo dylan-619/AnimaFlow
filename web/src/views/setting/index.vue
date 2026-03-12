@@ -77,33 +77,27 @@
 
       <!-- 提示词管理 -->
       <el-tab-pane label="提示词" name="prompts">
-        <div class="prompt-list">
-          <el-card v-for="p in prompts" :key="p.id" shadow="hover" class="prompt-item-card">
-            <template #header>
-              <div class="flex-between">
-                <div class="header-left">
-                  <span class="prompt-name">{{ p.name }}</span>
-                  <el-tag size="small" type="info" class="ml-8">{{ p.code }}</el-tag>
-                </div>
-                <div class="header-actions">
-                  <template v-if="editingPromptId === p.id">
-                    <el-button size="small" @click="cancelEditPrompt()">取消</el-button>
-                    <el-button size="small" type="primary" @click="savePrompt(p)">保存</el-button>
-                  </template>
-                  <template v-else>
-                    <el-button size="small" @click="startEditPrompt(p)">编辑</el-button>
-                    <el-button size="small" @click="resetPrompt(p)" v-if="p.customValue">重置</el-button>
-                  </template>
-                </div>
+        <div class="prompt-grid">
+          <div v-for="p in prompts" :key="p.id" class="prompt-card" @click="openPromptDialog(p)">
+            <div class="prompt-card-header">
+              <div class="prompt-card-title">
+                <span class="prompt-name">{{ p.name }}</span>
+                <el-tag v-if="p.customValue" size="small" type="warning" class="ml-8">已自定义</el-tag>
               </div>
-            </template>
-
-            <el-input v-if="editingPromptId === p.id" v-model="editPromptValue" type="textarea" :rows="14"
-              placeholder="请输入自定义提示词..." />
-            <div v-else class="prompt-preview">
-              <pre>{{ p.customValue || p.defaultValue }}</pre>
+              <el-tag size="small" type="info">{{ p.code }}</el-tag>
             </div>
-          </el-card>
+            <div class="prompt-card-preview">
+              {{ (p.customValue || p.defaultValue || '').slice(0, 120) }}...
+            </div>
+            <div class="prompt-card-actions">
+              <el-button size="small" text type="primary" @click.stop="openPromptDialog(p)">
+                <el-icon class="mr-4"><Edit /></el-icon>编辑
+              </el-button>
+              <el-button v-if="p.customValue" size="small" text type="warning" @click.stop="resetPrompt(p)">
+                <el-icon class="mr-4"><RefreshRight /></el-icon>重置
+              </el-button>
+            </div>
+          </div>
         </div>
       </el-tab-pane>
 
@@ -210,6 +204,45 @@
           style="color: #c9d1d9; font-size: 12px; white-space: pre-wrap; margin: 0;">{{ testTTSLogs.join('\n') }}</pre>
       </div>
     </el-dialog>
+
+    <!-- 提示词编辑弹窗 -->
+    <el-dialog v-model="showPromptDialog" :title="editingPrompt?.name || '编辑提示词'" width="800px" top="5vh">
+      <div v-if="editingPrompt" class="prompt-dialog-content">
+        <div class="prompt-dialog-meta">
+          <el-tag size="small" type="info">{{ editingPrompt.code }}</el-tag>
+          <el-tag v-if="editingPrompt.customValue" size="small" type="warning">已自定义</el-tag>
+          <el-tag v-else size="small" type="success">使用默认值</el-tag>
+        </div>
+        
+        <el-alert v-if="editingPrompt.customValue" type="warning" :closable="false" class="mb-16">
+          <template #title>
+            <span>当前使用自定义值，点击"重置为默认"可恢复默认提示词</span>
+          </template>
+        </el-alert>
+
+        <div class="prompt-editor-section">
+          <div class="section-header">
+            <span class="section-title">提示词内容</span>
+            <el-button v-if="editingPrompt.customValue" size="small" text type="warning" @click="resetPromptInDialog">
+              <el-icon class="mr-4"><RefreshRight /></el-icon>重置为默认
+            </el-button>
+          </div>
+          <el-input
+            v-model="editPromptValue"
+            type="textarea"
+            :rows="18"
+            placeholder="请输入自定义提示词..."
+            class="prompt-textarea"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="showPromptDialog = false">取消</el-button>
+          <el-button type="primary" @click="savePromptFromDialog" :loading="savingPrompt">保存</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -239,6 +272,9 @@ const modelForm = reactive({ name: '', type: 'text', model: '', apiKey: '', base
 
 const editingPromptId = ref<number | null>(null)
 const editPromptValue = ref('')
+const showPromptDialog = ref(false)
+const editingPrompt = ref<PromptItem | null>(null)
+const savingPrompt = ref(false)
 const textConfigs = computed(() => configs.value.filter(c => c.type === 'text'))
 const imageConfigs = computed(() => configs.value.filter(c => c.type === 'image'))
 const videoConfigs = computed(() => configs.value.filter(c => c.type === 'video'))
@@ -341,14 +377,39 @@ async function savePrompt(p: PromptItem) {
   ElMessage.success('已保存')
 }
 
-function startEditPrompt(p: PromptItem) {
+function openPromptDialog(p: PromptItem) {
+  editingPrompt.value = p
   editingPromptId.value = p.id
   editPromptValue.value = p.customValue || p.defaultValue || ''
+  showPromptDialog.value = true
 }
 
-function cancelEditPrompt() {
-  editingPromptId.value = null
-  editPromptValue.value = ''
+async function savePromptFromDialog() {
+  if (!editingPrompt.value) return
+  savingPrompt.value = true
+  try {
+    await api.post('/api/prompt/update', { id: editingPrompt.value.id, customValue: editPromptValue.value })
+    editingPrompt.value.customValue = editPromptValue.value
+    showPromptDialog.value = false
+    ElMessage.success('已保存')
+  } catch (err: any) {
+    ElMessage.error(err.message || '保存失败')
+  } finally {
+    savingPrompt.value = false
+  }
+}
+
+async function resetPromptInDialog() {
+  if (!editingPrompt.value) return
+  try {
+    await ElMessageBox.confirm('确定重置为默认提示词？')
+    await api.post('/api/prompt/reset', { id: editingPrompt.value.id })
+    editingPrompt.value.customValue = null
+    editPromptValue.value = editingPrompt.value.defaultValue || ''
+    ElMessage.success('已重置为默认值')
+  } catch (e) {
+    // 用户取消
+  }
 }
 
 async function resetPrompt(p: PromptItem) {
@@ -435,56 +496,131 @@ async function queryExternalTask() {
   gap: 6px;
 }
 
-.prompt-list {
+/* 提示词卡片网格 */
+.prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.prompt-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 
-.prompt-item-card {
-  border: 1px solid var(--border);
+.prompt-card:hover {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
 }
 
+.prompt-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.prompt-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.prompt-card-preview {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  flex: 1;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.prompt-card-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* 提示词编辑弹窗 */
+.prompt-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.prompt-dialog-meta {
+  display: flex;
+  gap: 8px;
+}
+
+.prompt-editor-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.prompt-textarea :deep(textarea) {
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 通用 */
 .flex-between {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-}
-
-.prompt-name {
-  font-size: 15px;
-  font-weight: 600;
-}
-
 .ml-8 {
   margin-left: 8px;
 }
 
+.mr-4 {
+  margin-right: 4px;
+}
+
+.mb-16 {
+  margin-bottom: 16px;
+}
+
 .mb-24 {
   margin-bottom: 24px;
-}
-
-.prompt-preview {
-  background: var(--bg-secondary);
-  padding: 16px;
-  border-radius: 8px;
-  max-height: 500px;
-  overflow-y: auto;
-}
-
-.prompt-preview pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text-secondary);
 }
 
 .debug-result {

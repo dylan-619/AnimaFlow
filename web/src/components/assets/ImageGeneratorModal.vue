@@ -1,58 +1,102 @@
 <template>
-    <el-dialog v-model="visible" title="图片生成" width="900px" destroy-on-close :close-on-click-modal="false"
+    <el-dialog v-model="visible" title="图片生成与编辑" width="960px" destroy-on-close :close-on-click-modal="false"
         class="image-gen-dialog">
-        <div class="model-body" v-loading="loading" element-loading-text="正在为您生成图片，请耐心等待...">
+        <div class="model-body" v-loading="loading" :element-loading-text="loadingText">
             <div v-if="asset" class="content-wrapper">
                 <!-- 左侧面板 -->
                 <div class="left-panel">
                     <div class="section-card">
-                        <!-- 模式切换，由于只有AI生成，暂定不显示上传选项，但也留好后续扩展结构 -->
-
-                        <div class="upload-section">
+                        <!-- 模式切换 -->
+                        <div class="mode-section">
                             <div class="section-header">
-                                <span class="name-pre">参考图片</span>
-                                <span class="optional-tag">可选</span>
+                                <span class="name-pre">生成模式</span>
                             </div>
-                            <div class="picture-preview" @click="changeFile">
-                                <template v-if="sampleImage">
-                                    <div class="image-div pr">
-                                        <img :src="sampleImage" class="element-img" />
-                                        <div class="image-overlay">
-                                            <el-button type="danger" circle size="small" :icon="Delete"
-                                                @click.stop="deleteImage" />
-                                        </div>
+                            <el-radio-group v-model="editMode" size="default" class="mode-radio-group">
+                                <el-radio-button value="create">新建</el-radio-button>
+                                <el-radio-button value="local_edit">局部修改</el-radio-button>
+                                <el-radio-button value="style_transfer">风格迁移</el-radio-button>
+                                <el-radio-button value="expand">画面扩展</el-radio-button>
+                            </el-radio-group>
+                        </div>
+
+                        <!-- 编辑模式下的源图片选择 -->
+                        <div v-if="editMode !== 'create'" class="source-section">
+                            <div class="section-header">
+                                <span class="name-pre">源图片</span>
+                                <span class="optional-tag" v-if="historyImages.length > 0">从历史中选择</span>
+                            </div>
+                            
+                            <!-- 历史图片选择 -->
+                            <div v-if="historyImages.length > 0" class="source-grid">
+                                <div v-for="(img, index) in historyImages" :key="index" 
+                                    class="source-item"
+                                    :class="{ selected: selectedSourceIndex === index }"
+                                    @click="selectSourceImage(index)">
+                                    <el-image :src="`http://localhost:60000/uploads/${img}`" fit="cover" />
+                                    <div v-if="selectedSourceIndex === index" class="source-badge">
+                                        <el-icon color="#fff"><Check /></el-icon>
                                     </div>
-                                </template>
-                                <div v-else class="upload-placeholder">
-                                    <el-icon class="upload-icon" size="32" color="var(--accent)">
-                                        <UploadFilled />
-                                    </el-icon>
-                                    <span class="upload-text">点击上传</span>
+                                </div>
+                            </div>
+                            
+                            <!-- 上传新图片作为源 -->
+                            <div class="upload-source">
+                                <span class="upload-label">或上传新图片：</span>
+                                <div class="picture-preview" @click="changeFile">
+                                    <template v-if="sampleImage">
+                                        <div class="image-div pr">
+                                            <img :src="sampleImage" class="element-img" />
+                                            <div class="image-overlay">
+                                                <el-button type="danger" circle size="small" :icon="Delete"
+                                                    @click.stop="deleteImage" />
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <div v-else class="upload-placeholder">
+                                        <el-icon class="upload-icon" size="24" color="var(--accent)">
+                                            <UploadFilled />
+                                        </el-icon>
+                                        <span class="upload-text">点击上传</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
+                        <!-- 编辑强度滑块 -->
+                        <div v-if="editMode !== 'create'" class="strength-section">
+                            <div class="section-header">
+                                <span class="name-pre">编辑强度</span>
+                                <span class="strength-value">{{ editStrength.toFixed(1) }}</span>
+                            </div>
+                            <el-slider v-model="editStrength" :min="0.3" :max="0.8" :step="0.1" show-stops />
+                            <div class="strength-labels">
+                                <span>轻度</span>
+                                <span>中度</span>
+                                <span>大幅</span>
+                            </div>
+                        </div>
+
                         <!-- 资产描述 -->
-                        <div class="prompt-section" style="margin-bottom: 24px;">
+                        <div class="prompt-section" style="margin-bottom: 16px;">
                             <div class="section-header">
                                 <span class="name-pre">资产描述</span>
                             </div>
-                            <el-input v-model="introText" type="textarea" :rows="3" placeholder="请输入资产描述..." />
+                            <el-input v-model="introText" type="textarea" :rows="2" placeholder="请输入资产描述..." />
                         </div>
 
                         <!-- 提示词 -->
                         <div class="prompt-section">
                             <div class="section-header">
-                                <span class="name-pre">绘图提示词</span>
-                                <el-button link type="primary" size="small" @click.stop="generatePrompt"
+                                <span class="name-pre">{{ editMode === 'create' ? '绘图提示词' : '编辑描述' }}</span>
+                                <el-button v-if="editMode === 'create'" link type="primary" size="small" @click.stop="generatePrompt"
                                     :loading="promptLoading">
                                     <el-icon class="mr-4">
                                         <MagicStick />
                                     </el-icon>智能生成
                                 </el-button>
                             </div>
-                            <el-input v-model="promptText" type="textarea" :rows="6"
-                                placeholder="请输入或使用 AI 生成提示词，描述您想要生成的图片内容..." class="prompt-textarea" />
+                            <el-input v-model="promptText" type="textarea" :rows="editMode === 'create' ? 4 : 3"
+                                :placeholder="getPromptPlaceholder()" class="prompt-textarea" />
 
                             <div class="mt-16 flex-center" v-if="asset.type === 'role'"
                                 style="justify-content: space-between;">
@@ -66,7 +110,7 @@
                             :loading="generateLoading" style="width: 100%;">
                             <el-icon class="mr-8">
                                 <Lightning />
-                            </el-icon> 开始生成
+                            </el-icon> {{ editMode === 'create' ? '开始生成' : '开始编辑' }}
                         </el-button>
                     </div>
                 </div>
@@ -134,12 +178,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, UploadFilled, MagicStick, Lightning, Loading, Picture, Check } from '@element-plus/icons-vue'
 import { useFileDialog } from '@vueuse/core'
 import api from '../../utils/axios'
 import type { Asset } from '../../types'
+
+// 编辑模式类型
+type EditMode = 'create' | 'local_edit' | 'style_transfer' | 'expand'
 
 const props = defineProps<{ asset?: Asset }>()
 const emit = defineEmits<{ (e: 'update'): void }>()
@@ -155,6 +202,12 @@ const promptLoading = ref(false)
 const generateLoading = ref(false)
 const saveLoading = ref(false)
 
+// 编辑模式相关
+const editMode = ref<EditMode>('create')
+const editStrength = ref(0.5)
+const selectedSourceIndex = ref(-1)
+const historyImages = ref<string[]>([])
+
 const promptText = ref('')
 const introText = ref('')
 const sampleImage = ref('')
@@ -162,20 +215,27 @@ const isMasterReference = ref(false)
 const resultImages = ref<ImageState[]>([])
 const selectedIndex = ref(-1)
 
+// 计算加载文本
+const loadingText = computed(() => {
+    return editMode.value === 'create' ? '正在为您生成图片，请耐心等待...' : '正在编辑图片，请耐心等待...'
+})
+
 // 文件选择
 const { open, onChange, onCancel } = useFileDialog({ multiple: false, reset: true, accept: 'image/png,image/jpeg,image/jpg' })
-
-// Fake Timer mechanism for progress check since standard generation api is synchronous but potentially slow.
-// NOTE: With standard HTTP, we wait. If there's an async job mechanism, we poll. Currently we wait synchronously.
-// ResultImages format supports both. We'll simulate async for UX briefly if needed, or simply wait.
 
 watch(visible, (val) => {
     if (val && props.asset) {
         promptText.value = props.asset.prompt || ''
         introText.value = props.asset.intro || ''
-        sampleImage.value = '' // Initial empty for sample unless fetched
+        sampleImage.value = ''
         isMasterReference.value = props.asset.isMasterReference === 1
+        
+        // 重置编辑模式相关状态
+        editMode.value = 'create'
+        editStrength.value = 0.5
+        selectedSourceIndex.value = -1
 
+        // 解析历史图片
         let historyArr: string[] = []
         try {
             if (props.asset.history) {
@@ -183,21 +243,48 @@ watch(visible, (val) => {
             }
         } catch (e) { }
 
+        historyImages.value = historyArr
         resultImages.value = historyArr.map(h => ({ filePath: h, state: 'success' }))
 
         if (resultImages.value.length === 0 && props.asset.filePath) {
             resultImages.value = [{ filePath: props.asset.filePath, state: 'success' }]
+            historyImages.value = [props.asset.filePath]
         }
 
         selectedIndex.value = resultImages.value.findIndex(item => item.filePath === props.asset?.filePath)
         if (selectedIndex.value === -1 && resultImages.value.length > 0) {
             selectedIndex.value = 0
         }
+        
+        // 默认选择第一个历史图片作为源图片
+        if (historyImages.value.length > 0) {
+            selectedSourceIndex.value = 0
+        }
 
         promptLoading.value = false
         generateLoading.value = false
     }
 })
+
+// 获取提示词占位符
+function getPromptPlaceholder() {
+    switch (editMode.value) {
+        case 'local_edit':
+            return '描述您想要的修改，如：让她微笑、改变衣服颜色、调整姿势...'
+        case 'style_transfer':
+            return '描述目标风格，如：转换为赛博朋克风格、水彩画风、复古80年代风格...'
+        case 'expand':
+            return '描述扩展区域的内容，如：向右扩展展示更多咖啡座位区...'
+        default:
+            return '请输入或使用 AI 生成提示词，描述您想要生成的图片内容...'
+    }
+}
+
+// 选择源图片
+function selectSourceImage(index: number) {
+    selectedSourceIndex.value = index
+    sampleImage.value = '' // 清除上传的图片
+}
 
 async function changeFile() {
     const files = await new Promise<FileList | null>((resolve) => {
@@ -209,6 +296,7 @@ async function changeFile() {
     if (!files?.length) return;
     const file = files[0];
     sampleImage.value = await fileToBase64(file);
+    selectedSourceIndex.value = -1 // 清除历史选择
 }
 
 function deleteImage() {
@@ -221,7 +309,7 @@ async function generatePrompt() {
     try {
         const res: any = await api.post('/api/assets/polishPrompt', { assetId: props.asset.id });
         promptText.value = res.data.prompt;
-        emit('update'); // Emit update so the new prompt is reloaded in the parent list
+        emit('update');
         ElMessage.success('提示词生成成功');
     } catch (e: any) {
         ElMessage.error(e.message || '提示词生成失败');
@@ -247,58 +335,111 @@ function removeResult(index: number) {
     resultImages.value.splice(index, 1);
 }
 
-// 模拟异步请求任务流程（根据后端接口替换真实实现）
+// 获取源图片URL
+function getSourceImageUrl(): string {
+    if (sampleImage.value) {
+        return sampleImage.value
+    }
+    if (selectedSourceIndex.value >= 0 && historyImages.value[selectedSourceIndex.value]) {
+        // 如果配置了OSS，使用公网URL
+        if (props.asset?.publicUrl) {
+            return props.asset.publicUrl
+        }
+        // 否则使用本地服务器URL
+        return `http://localhost:60000/uploads/${historyImages.value[selectedSourceIndex.value]}`
+    }
+    return ''
+}
+
+// 开始生成/编辑
 async function startGenerate() {
     if (!props.asset) return;
-    if (!promptText.value) {
-        ElMessage.warning('请输入或生成提示词');
-        return;
+    
+    // 编辑模式校验
+    if (editMode.value !== 'create') {
+        if (!sampleImage.value && selectedSourceIndex.value < 0) {
+            ElMessage.warning('请选择或上传源图片');
+            return;
+        }
+        if (!promptText.value) {
+            ElMessage.warning('请输入编辑描述');
+            return;
+        }
+    } else {
+        if (!promptText.value) {
+            ElMessage.warning('请输入或生成提示词');
+            return;
+        }
     }
 
     generateLoading.value = true;
     loading.value = true;
 
     try {
-        // Currently we trigger /api/task/create wait style because generating images is heavy. But we can also trigger a direct call.
         const tempIndex = resultImages.value.length;
         resultImages.value.push({ filePath: '', state: 'generating' });
 
-        // Note: Realistically, the generic /api/assets/generate endpoint needs to handle base64 images, which we mock logic for here.
-        const payload = {
-            assetId: props.asset.id,
-            // Optional payload expansion could happen in backend to accept new prompt and reference
-        };
-
-        // Hack / Update prompt first
+        // 先保存提示词和描述
         if (promptText.value !== props.asset.prompt || introText.value !== props.asset.intro) {
             await api.post('/api/assets/update', { id: props.asset.id, intro: introText.value, prompt: promptText.value });
         }
 
-        // Ideally we hit a specific controller. For now rely on generic /api/task/create (asset_image) 
-        // which we see in AssetsPanel.vue genOneImage.
-        const res: any = await api.post('/api/task/create', { type: 'asset_image', projectId: props.asset.projectId, input: payload });
-        const taskId = res.data.taskId;
+        let res: any;
+        
+        if (editMode.value === 'create') {
+            // 新建模式：使用原有的任务创建接口
+            const payload = { assetId: props.asset.id };
+            res = await api.post('/api/task/create', { type: 'asset_image', projectId: props.asset.projectId, input: payload });
+            const taskId = res.data.taskId;
 
-        // Poll task...
-        let completed = false;
-        while (!completed) {
-            await new Promise(r => setTimeout(r, 2000));
-            const check: any = await api.post('/api/task/status', { taskId });
-            if (check.data.status === 'completed') {
-                completed = true;
-                const newAsset = await fetchAsset(props.asset.id);
-                resultImages.value[tempIndex] = { filePath: newAsset.filePath || '', state: 'success' };
+            // 轮询任务状态
+            let completed = false;
+            while (!completed) {
+                await new Promise(r => setTimeout(r, 2000));
+                const check: any = await api.post('/api/task/status', { taskId });
+                if (check.data.status === 'completed') {
+                    completed = true;
+                    const newAsset = await fetchAsset(props.asset.id);
+                    resultImages.value[tempIndex] = { filePath: newAsset.filePath || '', state: 'success' };
+                    selectedIndex.value = tempIndex;
+                    ElMessage.success('资产图片生成成功!');
+                } else if (check.data.status === 'failed') {
+                    completed = true;
+                    resultImages.value[tempIndex].state = 'failed';
+                    ElMessage.error(check.data.error || '生成失败');
+                }
+            }
+        } else {
+            // 编辑模式：使用编辑接口
+            const sourceImage = getSourceImageUrl()
+            res = await api.post('/api/assets/editImage', {
+                assetId: props.asset.id,
+                mode: editMode.value,
+                sourceImage,
+                editPrompt: promptText.value,
+                strength: editStrength.value
+            })
+            
+            if (res.data?.filePath) {
+                resultImages.value[tempIndex] = { filePath: res.data.filePath, state: 'success' };
                 selectedIndex.value = tempIndex;
-                ElMessage.success('资产图片生成成功!');
-            } else if (check.data.status === 'failed') {
-                completed = true;
-                resultImages.value[tempIndex].state = 'failed';
-                ElMessage.error(check.data.error || '生成失败');
+                // 更新历史图片列表
+                if (res.data.history) {
+                    historyImages.value = res.data.history
+                }
+                ElMessage.success('图片编辑成功!');
+            } else {
+                throw new Error('编辑结果无效')
             }
         }
 
     } catch (e: any) {
-        ElMessage.error(e.message || '生成请求失败');
+        ElMessage.error(e.message || '请求失败');
+        // 移除生成中的占位
+        const generatingIndex = resultImages.value.findIndex(item => item.state === 'generating')
+        if (generatingIndex >= 0) {
+            resultImages.value.splice(generatingIndex, 1)
+        }
     } finally {
         generateLoading.value = false;
         loading.value = false;
@@ -306,7 +447,6 @@ async function startGenerate() {
 }
 
 async function fetchAsset(id: number) {
-    // Hacky partial fetch workaround since standard list isn't single. 
     const res: any = await api.post('/api/assets/list', { projectId: props.asset?.projectId });
     return res.data.find((a: any) => a.id === id) || { filePath: '' };
 }
@@ -353,11 +493,11 @@ function fileToBase64(file: File | Blob): Promise<string> {
     display: flex;
     gap: 20px;
     align-items: stretch;
-    min-height: 400px;
+    min-height: 450px;
 }
 
 .left-panel {
-    width: 340px;
+    width: 380px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -389,7 +529,7 @@ function fileToBase64(file: File | Blob): Promise<string> {
 }
 
 .name-pre {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
 }
@@ -402,15 +542,88 @@ function fileToBase64(file: File | Blob): Promise<string> {
     border-radius: 4px;
 }
 
-.upload-section {
-    margin-bottom: 24px;
+/* 模式选择 */
+.mode-section {
+    margin-bottom: 20px;
+}
+
+.mode-radio-group {
+    width: 100%;
+}
+
+.mode-radio-group :deep(.el-radio-button__inner) {
+    width: 100%;
+    font-size: 13px;
+}
+
+/* 源图片选择 */
+.source-section {
+    margin-bottom: 20px;
+    padding: 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+}
+
+.source-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.source-item {
+    aspect-ratio: 1/1;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.source-item:hover {
+    border-color: var(--el-color-primary-light-3);
+}
+
+.source-item.selected {
+    border-color: var(--accent);
+}
+
+.source-item :deep(.el-image) {
+    width: 100%;
+    height: 100%;
+}
+
+.source-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 18px;
+    height: 18px;
+    background: var(--accent);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.upload-source {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.upload-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
 }
 
 .picture-preview {
-    width: 120px;
-    aspect-ratio: 1/1;
+    width: 80px;
+    height: 80px;
     border: 2px dashed var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
     overflow: hidden;
     background: var(--bg-body);
     display: flex;
@@ -435,8 +648,8 @@ function fileToBase64(file: File | Blob): Promise<string> {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    padding: 16px;
+    gap: 4px;
+    padding: 8px;
 }
 
 .upload-icon {
@@ -444,7 +657,7 @@ function fileToBase64(file: File | Blob): Promise<string> {
 }
 
 .upload-text {
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-secondary);
 }
@@ -470,15 +683,34 @@ function fileToBase64(file: File | Blob): Promise<string> {
     opacity: 1;
 }
 
+/* 编辑强度 */
+.strength-section {
+    margin-bottom: 20px;
+}
+
+.strength-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.strength-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
 .prompt-section {
-    margin-bottom: 24px;
+    margin-bottom: 16px;
     flex: 1;
     display: flex;
     flex-direction: column;
 }
 
 .prompt-textarea {
-    margin-top: auto;
+    flex: 1;
 }
 
 .generate-btn {
@@ -502,7 +734,7 @@ function fileToBase64(file: File | Blob): Promise<string> {
 .result-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-    gap: 16px;
+    gap: 12px;
 }
 
 .result-item {
@@ -566,8 +798,8 @@ function fileToBase64(file: File | Blob): Promise<string> {
 }
 
 .footer-btns {
-    margin-top: 24px;
-    padding-top: 20px;
+    margin-top: 20px;
+    padding-top: 16px;
     border-top: 1px solid var(--border);
     display: flex;
     justify-content: flex-end;

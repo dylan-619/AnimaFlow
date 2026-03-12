@@ -8,16 +8,17 @@
         <el-select v-model="selectedScriptId" placeholder="选择剧本" size="default" style="width:200px">
           <el-option v-for="s in scripts" :key="s.id" :label="s.name || `#${s.id}`" :value="s.id" />
         </el-select>
-        <el-button type="primary" @click="generateStoryboard" :loading="generating"
+        <el-button size="default" type="primary" @click="generateStoryboard" :loading="generating"
           :disabled="!selectedScriptId">生成分镜</el-button>
-        <el-button @click="polishPrompts" :loading="polishing" :disabled="!shots.length">批量优化提示词</el-button>
-        <el-button @click="generateImages" :loading="genImages" :disabled="!shots.length">批量生成图片</el-button>
-        <el-button type="success" @click="generateTTS" :loading="genTTS" :disabled="!shots.length">批量生成配音</el-button>
+        <el-button size="default" @click="polishPrompts" :loading="polishing" :disabled="!shots.length">批量优化提示词</el-button>
+        <el-button size="default" @click="generateImages" :loading="genImages" :disabled="!shots.length">批量生成图片</el-button>
+        <el-button size="default" type="warning" @click="generateVideos" :loading="genVideos" :disabled="!shots.length">批量生成视频</el-button>
+        <el-button size="default" type="success" @click="generateTTS" :loading="genTTS" :disabled="!shots.length">批量生成配音</el-button>
         <el-divider direction="vertical" />
-        <el-button :type="selectMode ? 'warning' : 'info'" plain @click="toggleSelectMode" :disabled="!shots.length">
+        <el-button size="default" :type="selectMode ? 'warning' : 'info'" plain @click="toggleSelectMode" :disabled="!shots.length">
           {{ selectMode ? '取消选择' : '批量选择' }}
         </el-button>
-        <el-button v-if="selectMode" type="danger" @click="batchDelete" :disabled="!selectedIds.length">
+        <el-button v-if="selectMode" size="default" type="danger" @click="batchDelete" :disabled="!selectedIds.length">
           删除选中 ({{ selectedIds.length }})
         </el-button>
       </div>
@@ -32,6 +33,22 @@
         <div class="shot-img-box" @click="openImageModal(shot)">
           <img v-if="shot.filePath" :src="`http://localhost:60000/uploads/${shot.filePath}`" />
           <div v-else class="img-placeholder">点击生成</div>
+        </div>
+        
+        <!-- 🔴 新增：历史图片选择 -->
+        <div v-if="getHistoryImages(shot).length > 1" class="shot-history">
+          <div class="history-label">历史图片 ({{ getHistoryImages(shot).length }})</div>
+          <div class="history-grid">
+            <div v-for="(imgPath, idx) in getHistoryImages(shot)" :key="idx"
+              class="history-item"
+              :class="{ 'is-selected': shot.filePath === imgPath }"
+              @click="selectHistoryImage(shot, imgPath)">
+              <img :src="`http://localhost:60000/uploads/${imgPath}`" />
+              <div v-if="shot.filePath === imgPath" class="selected-badge">
+                <el-icon><Check /></el-icon>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="shot-info">
           <div class="shot-header">
@@ -76,6 +93,12 @@
             <div class="polished-content">{{ shot.polishedPrompt }}</div>
           </div>
           <div v-if="shot.dubbingText !== null" class="mt-12">
+            <!-- 说话者标签 -->
+            <div v-if="shot.speaker" style="margin-bottom: 6px;">
+              <el-tag :type="shot.speaker === '旁白' ? 'info' : 'primary'" size="small">
+                {{ shot.speaker === '旁白' ? '🎙️ 旁白' : `👤 ${shot.speaker}` }}
+              </el-tag>
+            </div>
             <div style="display: flex; gap: 8px; margin-bottom: 8px;">
               <el-select v-model="shot.dubbingVoice" size="small" placeholder="无配音" style="width: 140px"
                 @change="updateShot(shot)">
@@ -96,6 +119,15 @@
                   <el-option value="audiobook_male_2" label="男播音员" />
                   <el-option value="audiobook_female_1" label="女播音员" />
                 </el-option-group>
+              </el-select>
+              <!-- 情绪选择器 -->
+              <el-select v-model="shot.dubbingEmotion" size="small" placeholder="自动" style="width: 100px"
+                @change="updateShot(shot)" clearable>
+                <el-option value="" label="自动（继承角色）" />
+                <el-option value="calm" label="中性" />
+                <el-option value="happy" label="高兴" />
+                <el-option value="sad" label="悲伤" />
+                <el-option value="angry" label="愤怒" />
               </el-select>
               <audio v-if="shot.audioPath" :src="`http://localhost:60000/uploads/${shot.audioPath}`" controls
                 style="height: 24px; flex: 1" />
@@ -140,6 +172,7 @@ const shots = ref<StoryboardShot[]>([])
 const selectedScriptId = ref<number | null>(null)
 const generating = ref(false)
 const genImages = ref(false)
+const genVideos = ref(false)
 const genTTS = ref(false)
 const polishing = ref(false)
 const currentTaskId = ref('')
@@ -181,14 +214,59 @@ async function generateStoryboard() {
 async function generateImages() {
   genImages.value = true
   try {
-    const ids = shots.value.filter(s => !s.filePath).map(s => s.id)
-    if (!ids.length) { ElMessage.info('所有分镜已有图片'); return }
-    const taskId = await taskStore.createTask(projectId, 'storyboard_image', { storyboardIds: ids })
+    // 🔴 修复：如果在选择模式下，只生成选中的分镜（允许重新生成）；否则生成所有未生成的
+    let targetIds: number[]
+    let skipExisting: boolean
+    
+    if (selectMode.value && selectedIds.value.length > 0) {
+      // 批量选择模式：生成选中的分镜（包括已有图片的，允许重新生成）
+      targetIds = selectedIds.value
+      
+      // 检查是否所有选中的分镜都有图片
+      const allHaveImages = selectedIds.value.every(id => {
+        const shot = shots.value.find(s => s.id === id)
+        return shot && shot.filePath
+      })
+      
+      if (allHaveImages) {
+        // 如果都有图片，提示用户确认是否重新生成
+        try {
+          await ElMessageBox.confirm(
+            '选中的分镜都已有图片，确定要重新生成吗？',
+            '确认重新生成',
+            { type: 'warning', confirmButtonText: '重新生成', cancelButtonText: '取消' }
+          )
+        } catch {
+          // 用户取消
+          return
+        }
+      }
+      
+      skipExisting = false // 允许重新生成已有图片的分镜
+      ElMessage.info(`开始生成选中的 ${targetIds.length} 个分镜图片...`)
+    } else {
+      // 普通模式：只生成未生成的分镜
+      targetIds = shots.value.filter(s => !s.filePath).map(s => s.id)
+      
+      if (!targetIds.length) {
+        ElMessage.info('所有分镜已有图片')
+        return
+      }
+      
+      skipExisting = true // 跳过已有图片的分镜
+    }
+    
+    const taskId = await taskStore.createTask(projectId, 'storyboard_image', { 
+      storyboardIds: targetIds,
+      skipExisting  // 🔴 新增：传递 skipExisting 参数
+    })
     currentTaskId.value = taskId
     await taskStore.waitForTask(taskId)
     ElMessage.success('图片生成完成')
     loadShots()
-  } catch (e: any) { ElMessage.error(e.message) }
+  } catch (e: any) { 
+    if (e !== 'cancel') ElMessage.error(e.message) 
+  }
   finally { genImages.value = false }
 }
 
@@ -244,15 +322,91 @@ async function polishPrompts() {
 async function generateTTS() {
   genTTS.value = true
   try {
-    const ids = shots.value.filter(s => s.dubbingText && s.dubbingVoice && !s.audioPath).map(s => s.id)
-    if (!ids.length) { ElMessage.info('没有需要生成配音的分镜（需填写台词并选择音色）'); return }
-    const taskId = await taskStore.createTask(projectId, 'storyboard_tts', { storyboardIds: ids })
+    // 🔴 修复：如果在选择模式下，只生成选中的分镜；否则生成所有需要的分镜
+    let targetIds: number[]
+    
+    if (selectMode.value && selectedIds.value.length > 0) {
+      // 批量选择模式：生成选中的分镜（需要有台词和音色）
+      targetIds = selectedIds.value.filter(id => {
+        const shot = shots.value.find(s => s.id === id)
+        return shot && shot.dubbingText && shot.dubbingVoice
+      })
+      
+      if (!targetIds.length) {
+        ElMessage.info('选中的分镜需要填写台词并选择音色')
+        return
+      }
+      
+      ElMessage.info(`开始生成选中的 ${targetIds.length} 个分镜配音...`)
+    } else {
+      // 普通模式：生成所有需要的分镜
+      targetIds = shots.value.filter(s => s.dubbingText && s.dubbingVoice && !s.audioPath).map(s => s.id)
+      
+      if (!targetIds.length) {
+        ElMessage.info('没有需要生成配音的分镜（需填写台词并选择音色）')
+        return
+      }
+    }
+    
+    const taskId = await taskStore.createTask(projectId, 'storyboard_tts', { storyboardIds: targetIds })
     currentTaskId.value = taskId
     await taskStore.waitForTask(taskId)
     ElMessage.success('配音批量生成完成')
     loadShots()
   } catch (e: any) { ElMessage.error(e.message) }
   finally { genTTS.value = false }
+}
+
+// 🔴 新增：批量生成视频
+async function generateVideos() {
+  genVideos.value = true
+  try {
+    // 如果在选择模式下，只生成选中的分镜；否则生成所有需要的分镜
+    let targetIds: number[]
+    
+    if (selectMode.value && selectedIds.value.length > 0) {
+      // 批量选择模式：生成选中的分镜（需要有图片）
+      targetIds = selectedIds.value.filter(id => {
+        const shot = shots.value.find(s => s.id === id)
+        return shot && shot.filePath // 需要有图片才能生成视频
+      })
+      
+      if (!targetIds.length) {
+        ElMessage.info('选中的分镜需要先生成图片')
+        return
+      }
+      
+      ElMessage.info(`开始生成选中的 ${targetIds.length} 个分镜视频...`)
+    } else {
+      // 普通模式：生成所有有图片的分镜
+      targetIds = shots.value.filter(s => s.filePath).map(s => s.id)
+      
+      if (!targetIds.length) {
+        ElMessage.info('没有需要生成视频的分镜（需先生成图片）')
+        return
+      }
+    }
+    
+    // 调用后端批量生成视频接口
+    const res: any = await api.post('/api/batch/videos', {
+      projectId,
+      storyboardIds: targetIds,
+      skipExisting: !selectMode.value, // 批量选择模式下不跳过已有视频
+      concurrency: 2 // 视频生成并行度较低
+    })
+    
+    if (res.data?.taskIds?.length) {
+      ElMessage.success(`已创建 ${res.data.taskIds.length} 个视频生成任务`)
+      // 监听第一个任务的状态
+      currentTaskId.value = res.data.taskIds[0]
+    } else {
+      ElMessage.info(res.data?.message || '没有需要生成视频的分镜')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '批量生成视频失败')
+  } finally {
+    genVideos.value = false
+  }
 }
 
 async function generateSingleTTS(shot: StoryboardShot) {
@@ -272,7 +426,36 @@ async function generateSingleTTS(shot: StoryboardShot) {
 }
 
 async function updateShot(shot: StoryboardShot) {
-  await api.post('/api/storyboard/update', { id: shot.id, shotPrompt: shot.shotPrompt, shotAction: shot.shotAction, dubbingText: shot.dubbingText, dubbingVoice: shot.dubbingVoice, shotDuration: shot.shotDuration, cameraMovement: shot.cameraMovement })
+  await api.post('/api/storyboard/update', { id: shot.id, shotPrompt: shot.shotPrompt, shotAction: shot.shotAction, dubbingText: shot.dubbingText, dubbingVoice: shot.dubbingVoice, dubbingEmotion: shot.dubbingEmotion, speaker: shot.speaker, shotDuration: shot.shotDuration, cameraMovement: shot.cameraMovement })
+}
+
+// 🔴 新增：获取历史图片数组
+function getHistoryImages(shot: StoryboardShot): string[] {
+  try {
+    return JSON.parse(shot.history || '[]')
+  } catch (e) {
+    return []
+  }
+}
+
+// 🔴 新增：选择使用某张历史图片
+async function selectHistoryImage(shot: StoryboardShot, imgPath: string) {
+  // 如果选择的是当前图片，不做任何操作
+  if (shot.filePath === imgPath) return
+  
+  // 调用接口更新
+  await api.post('/api/storyboard/select-image', {
+    id: shot.id,
+    filePath: imgPath
+  })
+  
+  // 更新本地数据
+  const index = shots.value.findIndex(s => s.id === shot.id)
+  if (index !== -1) {
+    shots.value[index].filePath = imgPath
+  }
+  
+  ElMessage.success('已切换使用图片')
 }
 
 function openImageModal(shot: StoryboardShot) {
@@ -384,6 +567,67 @@ function copyPolishedPrompt(text: string) {
   justify-content: center;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.shot-history {
+  width: 200px;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.history-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.history-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.history-item:hover {
+  border-color: var(--accent);
+  transform: scale(1.05);
+}
+
+.history-item.is-selected {
+  border-color: var(--success);
+}
+
+.history-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.selected-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--success);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 10px;
 }
 
 .shot-info {

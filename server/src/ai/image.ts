@@ -12,13 +12,33 @@ export interface ImageResult {
     publicUrl: string | null; // OSS 公网 URL（未配置 OSS 则为 null）
 }
 
+// 编辑模式类型定义
+export type EditMode = 'create' | 'local_edit' | 'style_transfer' | 'expand';
+
+export interface EditOptions {
+    mode: EditMode;
+    sourceImage: string;        // 源图片路径或URL
+    editPrompt: string;         // 编辑描述
+    strength: number;           // 编辑强度 0.3-0.8
+}
+
 /**
  * 图片生成统一入口
  * @returns 生成结果数组，包含本地文件名和 OSS 公网 URL
  */
 export async function imageGenerate(
     prompt: string,
-    options?: { width?: number; height?: number; count?: number; prefix?: string; size?: string; referenceImages?: string[]; ossDir?: string },
+    options?: {
+        width?: number;
+        height?: number;
+        count?: number;
+        prefix?: string;
+        size?: string;
+        referenceImages?: string[];
+        referenceStrength?: number; // 🔴 新增：参考图权重（0-1）
+        consistencyMode?: string;   // 🔴 新增：一致性模式标记
+        ossDir?: string
+    },
 ): Promise<ImageResult[]> {
     const setting = await db('t_setting').where('userId', 1).first();
     const config = await db('t_config').where('id', setting?.imageConfigId).first();
@@ -29,6 +49,70 @@ export async function imageGenerate(
             return volcengineImage(config, prompt, options);
         default:
             throw new Error(`不支持的图像厂商: ${config.manufacturer}，当前仅支持: volcengine`);
+    }
+}
+
+/**
+ * 图片编辑入口（图生图）
+ * 根据编辑模式生成增强提示词，然后调用图片生成接口
+ */
+export async function editImage(
+    options: EditOptions,
+    generateOptions?: {
+        width?: number;
+        height?: number;
+        prefix?: string;
+        ossDir?: string;
+    },
+): Promise<ImageResult[]> {
+    const { mode, sourceImage, editPrompt, strength } = options;
+
+    // 根据编辑模式生成增强提示词
+    const enhancedPrompt = generateEditPrompt(editPrompt, mode, strength);
+
+    console.log(`[图片编辑] 模式: ${mode}, 强度: ${strength}, 源图: ${sourceImage}`);
+    console.log(`[图片编辑] 增强提示词: ${enhancedPrompt.slice(0, 100)}...`);
+
+    // 调用图片生成接口，传入源图片作为参考图
+    return imageGenerate(enhancedPrompt, {
+        ...generateOptions,
+        referenceImages: [sourceImage],
+        referenceStrength: strength,
+        consistencyMode: mode,
+    });
+}
+
+/**
+ * 根据编辑模式生成增强提示词
+ */
+function generateEditPrompt(editPrompt: string, mode: EditMode, strength: number): string {
+    // 强度关键词映射
+    const strengthKeywords: Record<number, string> = {
+        0.3: 'subtle, gentle modification, light changes',
+        0.4: 'moderate modification, medium strength',
+        0.5: 'medium strength, balanced modification',
+        0.6: 'strong edit, significant changes',
+        0.7: 'significant transformation, major changes',
+        0.8: 'dramatic change, complete transformation',
+    };
+
+    const strengthKeyword = strengthKeywords[strength] || strengthKeywords[0.5];
+
+    switch (mode) {
+        case 'local_edit':
+            // 局部修改：保持原画面，修改特定区域
+            return `${editPrompt}, maintain the original composition and lighting, keep the overall style consistent, ${strengthKeyword}`;
+
+        case 'style_transfer':
+            // 风格迁移：改变整体风格
+            return `${editPrompt}, transform the style completely, ${strengthKeyword}, artistic transformation`;
+
+        case 'expand':
+            // 画面扩展：扩展边界
+            return `${editPrompt}, seamlessly extend the image, match the original style and lighting, ${strengthKeyword}`;
+
+        default:
+            return editPrompt;
     }
 }
 
@@ -85,6 +169,12 @@ async function volcengineImage(
     // 如果传入了参考图 URL 数组，按照官方文档加入 image 参数
     if (options?.referenceImages && options.referenceImages.length > 0) {
         requestBody.image = options.referenceImages;
+
+        // 🔴 新增：记录参考图权重和一致性模式（豆包API当前不支持权重参数，但记录用于未来升级）
+        if (options.referenceStrength !== undefined) {
+            console.log(`[图片生成] 参考图权重: ${options.referenceStrength}, 一致性模式: ${options.consistencyMode || 'default'}`);
+            // TODO: 当豆包API支持权重参数时，在此处添加：requestBody.reference_strength = options.referenceStrength;
+        }
     }
 
     const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/images/generations', {

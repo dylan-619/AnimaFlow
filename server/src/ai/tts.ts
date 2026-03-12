@@ -15,12 +15,25 @@ export const VOLCENGINE_VOICES = [
 export async function generateTTS(params: {
     text: string;
     voiceType: string;
+    emotion?: string; // 情绪参数（可选）
     configId?: number;
 }): Promise<Buffer> {
     const config = await getTTSConfig(params.configId);
 
     // 适配 MiniMax (星火/语音大模型)
     if (config.manufacturer === 'minimax') {
+        const voiceSetting: any = {
+            voice_id: params.voiceType,
+            speed: 1,
+            vol: 1,
+            pitch: 0
+        };
+        
+        // MiniMax 支持 emotion 参数
+        if (params.emotion) {
+            voiceSetting.emotion = params.emotion;
+        }
+        
         const response = await fetch(`${config.baseUrl || 'https://api.minimax.chat/v1'}/t2a_v2`, {
             method: 'POST',
             headers: {
@@ -31,12 +44,7 @@ export async function generateTTS(params: {
                 model: config.model || 'speech-01-turbo',
                 text: params.text,
                 stream: false,
-                voice_setting: {
-                    voice_id: params.voiceType,
-                    speed: 1,
-                    vol: 1,
-                    pitch: 0
-                },
+                voice_setting: voiceSetting,
                 audio_setting: {
                     sample_rate: 32000,
                     bitrate: 128000,

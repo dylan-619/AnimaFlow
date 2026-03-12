@@ -41,10 +41,49 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="资产描述" min-width="300">
+        <el-table-column label="资产描述" min-width="260">
           <template #default="{ row }">
             <el-input v-model="row.intro" type="textarea" :rows="2" size="small" @blur="updateAsset(row)"
               placeholder="请输入内容..." />
+          </template>
+        </el-table-column>
+
+        <!-- 配音音色列（仅角色Tab显示） -->
+        <el-table-column v-if="activeTab === 'role'" label="配音音色" width="160" align="center">
+          <template #default="{ row }">
+            <el-select v-model="row.voiceType" size="small" placeholder="未设置" style="width: 140px"
+              @change="updateAsset(row)" clearable>
+              <el-option-group label="OpenAI API 通用">
+                <el-option value="alloy" label="Alloy (通用中性)" />
+                <el-option value="echo" label="Echo (清朗男声)" />
+                <el-option value="fable" label="Fable (活泼男声)" />
+                <el-option value="onyx" label="Onyx (深沉男声)" />
+                <el-option value="nova" label="Nova (知性女声)" />
+                <el-option value="shimmer" label="Shimmer (柔和女声)" />
+              </el-option-group>
+              <el-option-group label="MiniMax 国内版">
+                <el-option value="male-qn-qingse" label="青涩男声" />
+                <el-option value="female-shaonv" label="元气少女" />
+                <el-option value="male-qn-jingying" label="精英男声" />
+                <el-option value="female-yujie" label="气质御姐" />
+                <el-option value="audiobook_male_2" label="男播音员" />
+                <el-option value="audiobook_female_1" label="女播音员" />
+              </el-option-group>
+            </el-select>
+          </template>
+        </el-table-column>
+
+        <!-- 默认情绪列（仅角色Tab显示） -->
+        <el-table-column v-if="activeTab === 'role'" label="默认情绪" width="120" align="center">
+          <template #default="{ row }">
+            <el-select v-model="row.defaultEmotion" size="small" placeholder="自动" style="width: 100px"
+              @change="updateAsset(row)" clearable>
+              <el-option value="" label="自动（calm）" />
+              <el-option value="calm" label="中性" />
+              <el-option value="happy" label="高兴" />
+              <el-option value="sad" label="悲伤" />
+              <el-option value="angry" label="愤怒" />
+            </el-select>
           </template>
         </el-table-column>
 
@@ -116,7 +155,7 @@ async function extractAssets() {
 }
 
 async function updateAsset(a: Asset) {
-  await api.post('/api/assets/update', { id: a.id, intro: a.intro, prompt: a.prompt, isMasterReference: a.isMasterReference })
+  await api.post('/api/assets/update', { id: a.id, intro: a.intro, prompt: a.prompt, voiceType: a.voiceType, defaultEmotion: a.defaultEmotion, isMasterReference: a.isMasterReference })
 }
 
 function openGenModal(a: Asset) {

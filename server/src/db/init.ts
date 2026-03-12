@@ -202,8 +202,16 @@ export async function initDatabase(knex: Knex) {
             t.text('output');
             t.text('error');
             t.integer('progress').defaultTo(0);
+            t.integer('priority').defaultTo(5); // 任务优先级（1-10，数字越大优先级越高）
             t.integer('createdAt');
             t.integer('updatedAt');
+        });
+    }
+
+    // 迁移：添加 priority 字段
+    if (!(await knex.schema.hasColumn('t_task', 'priority'))) {
+        await knex.schema.alterTable('t_task', (t) => {
+            t.integer('priority').defaultTo(5);
         });
     }
 
@@ -263,8 +271,32 @@ export async function initDatabase(knex: Knex) {
     if (!(await knex.schema.hasColumn('t_storyboard', 'relatedAssets'))) {
         await knex.schema.alterTable('t_storyboard', (t) => { t.text('relatedAssets'); });
     }
+    if (!(await knex.schema.hasColumn('t_storyboard', 'videoPath'))) {
+        await knex.schema.alterTable('t_storyboard', (t) => { t.text('videoPath'); });
+    }
+    if (!(await knex.schema.hasColumn('t_storyboard', 'shotAction'))) {
+        await knex.schema.alterTable('t_storyboard', (t) => { t.text('shotAction'); });
+    }
+    if (!(await knex.schema.hasColumn('t_storyboard', 'subShotIndex'))) {
+        await knex.schema.alterTable('t_storyboard', (t) => { t.integer('subShotIndex').defaultTo(0); });
+    }
+    // ---------- 迁移：配音角色音色与说话者 ----------
+    if (!(await knex.schema.hasColumn('t_assets', 'voiceType'))) {
+        await knex.schema.alterTable('t_assets', (t) => { t.text('voiceType'); });
+    }
+    if (!(await knex.schema.hasColumn('t_storyboard', 'speaker'))) {
+        await knex.schema.alterTable('t_storyboard', (t) => { t.text('speaker'); });
+    }
     if (!(await knex.schema.hasColumn('t_project', 'styleGuide'))) {
         await knex.schema.alterTable('t_project', (t) => { t.text('styleGuide'); });
+    }
+
+    // ---------- 迁移：情绪控制字段（TTS 情绪参数） ----------
+    if (!(await knex.schema.hasColumn('t_assets', 'defaultEmotion'))) {
+        await knex.schema.alterTable('t_assets', (t) => { t.text('defaultEmotion').defaultTo('calm'); });
+    }
+    if (!(await knex.schema.hasColumn('t_storyboard', 'dubbingEmotion'))) {
+        await knex.schema.alterTable('t_storyboard', (t) => { t.text('dubbingEmotion'); });
     }
 
     // ---------- 迁移：字幕配置 ----------
@@ -308,6 +340,60 @@ export async function initDatabase(knex: Knex) {
         await knex.schema.alterTable('t_storyboard', (t) => {
             t.text('cameraMovement');
         });
+    }
+
+    // ==================== 🔴 新增：质量评估系统数据表 ====================
+
+    // ---------- t_quality_score ----------
+    if (!(await knex.schema.hasTable('t_quality_score'))) {
+        await knex.schema.createTable('t_quality_score', (t) => {
+            t.increments('id').primary();
+            t.integer('storyboardId').references('t_storyboard.id');
+            t.integer('projectId');
+            t.string('modelName'); // 模型名称
+            t.float('clarity'); // 清晰度（1-10）
+            t.float('consistency'); // 一致性（1-10）
+            t.float('aesthetics'); // 美观度（1-10）
+            t.float('promptAdherence'); // 提示词遵循度（1-10）
+            t.float('overallScore'); // 综合评分
+            t.text('feedback'); // 用户反馈
+            t.boolean('needsReview').defaultTo(false); // 是否需要人工审核
+            t.text('recommendations'); // 改进建议（JSON数组）
+            t.integer('createdAt');
+        });
+        console.log('[数据库] 已创建 t_quality_score 表');
+    }
+
+    // ---------- t_model_comparison ----------
+    if (!(await knex.schema.hasTable('t_model_comparison'))) {
+        await knex.schema.createTable('t_model_comparison', (t) => {
+            t.increments('id').primary();
+            t.integer('projectId');
+            t.string('taskType'); // 'storyboard_image' | 'video_generate' | 'assets_image'
+            t.string('modelName'); // 模型名称
+            t.json('config'); // 模型配置参数
+            t.integer('priority'); // 优先级
+            t.boolean('enabled').defaultTo(true); // 是否启用
+            t.json('stats'); // 统计数据（成功率、平均质量分等）
+            t.float('avgDuration'); // 平均执行时长
+            t.integer('successCount').defaultTo(0); // 成功次数
+            t.integer('failCount').defaultTo(0); // 失败次数
+            t.float('avgQualityScore'); // 平均质量评分
+            t.integer('createdAt');
+            t.integer('updatedAt');
+        });
+        console.log('[数据库] 已创建 t_model_comparison 表');
+    }
+
+    // ---------- 迁移：图片编辑提示词 ----------
+    const editImagePrompt = (await knex('t_prompts').where('code', 'edit_image').first()) as any;
+    if (!editImagePrompt) {
+        const defaultPrompts = getDefaultPrompts();
+        const editPrompt = defaultPrompts.find((p: any) => p.code === 'edit_image');
+        if (editPrompt) {
+            await knex('t_prompts').insert(editPrompt);
+            console.log('[数据库] 已添加 edit_image 提示词');
+        }
     }
 }
 
@@ -451,6 +537,7 @@ endingHook (outline 之后的悬念延伸)
       "shotPrompt": "首帧静态画面描述（用于图片生成，只描述镜头开始时的静止状态，禁止包含动作过程）",
       "shotAction": "动作序列描述（用于视频生成，按时间顺序描述完整动作，如：先...然后...最后...）",
       "dubbingText": "台词/旁白文本（无需读出则留空字符串）",
+      "speaker": "说话者名称（角色名或\"旁白\"，无台词则填空字符串）",
       "relatedAssets": ["资产名称数组"]
     }
   ]
@@ -496,6 +583,168 @@ endingHook (outline 之后的悬念延伸)
 - 每个镜头的时长 \`shotDuration\` 根据动作复杂度和台词长度合理预估（通常为3-8秒）。
 - 明确运镜指令 \`cameraMovement\` 配合动作，例如特写适合微小位移，全境适合平移或大全固定。
 
+## 🔴 分镜完整性原则（重要修正）
+
+### 一个分镜 = 一个完整镜头
+
+**核心原则**：
+- **不拆解分镜**：一个分镜对应一个完整的镜头，包含完整的动作序列
+- **一张图片**：根据 \`shotPrompt\` 生成一张首帧静态图片
+- **一个视频**：根据 首帧图片 + \`shotAction\` + \`cameraMovement\` 生成完整视频
+- **运镜体现在 cameraMovement 中**：推镜头、拉远、平移等运镜指令应在 \`cameraMovement\` 字段中描述
+
+### 正确的分镜示例
+
+\`\`\`json
+{
+  "shotIndex": 1,
+  "shotDuration": 9,
+  "cameraMovement": "静止",
+  "shotPrompt": "特写，平视，混有淡褐铁锈颗粒的雨水洼静止在开裂沥青路面上，水面清晰倒映着两侧霓虹灯箱的红蓝光影",
+  "shotAction": "先静止镜头保持2秒，然后慢放状态下一颗混着铁锈颗粒的雨珠从上方坠落，最后砸在积水表面撞碎霓虹倒影，细密雨丝在侧光里持续飘落",
+  "dubbingText": ""
+}
+\`\`\`
+
+**说明**：
+- 这是一个完整的9秒镜头
+- \`shotPrompt\` 描述首帧：积水静止的状态
+- \`shotAction\` 描述完整动作：静止→雨珠坠落→砸在积水上
+- \`cameraMovement\` 描述运镜：静止镜头
+- 图片生成：生成1张积水静止的画面
+- 视频生成：基于首帧图片，生成雨珠坠落的完整9秒视频
+
+### 为什么不拆解？
+
+**错误做法**（已废弃）：
+\`\`\`
+❌ 拆解为3个子镜头：
+- S1-1-1: 先静止2秒（生成第1张图片）
+- S1-1-2: 然后雨珠坠落（生成第2张图片）
+- S1-1-3: 最后砸在积水上（生成第3张图片）
+\`\`\`
+
+**问题**：
+1. **浪费API**：生成3张几乎相同的图片
+2. **图片相似**：同一场景的连续动作，首帧画面几乎相同
+3. **破坏连贯性**：后期需要拼接3个视频片段，导致跳跃
+4. **与行业标准不符**：一个分镜应该是完整镜头
+
+**正确做法**：
+\`\`\`
+✅ 保持完整：
+- S1-1: 完整9秒镜头（生成1张图片 + 1个视频）
+\`\`\`
+
+**优势**：
+1. **节省成本**：只生成1张图片
+2. **保持连贯性**：视频是完整的连续镜头
+3. **符合行业标准**：一个分镜 = 一个完整镜头
+4. **运镜完整**：视频生成时能正确处理推拉摇移等运镜
+
+## 🔴 时序分解规则（新增）
+
+### 动作时长预估标准
+
+| 动作类型 | 基础时长 | 额外因素调整 | 示例 |
+|---------|---------|-------------|------|
+| **简单位移** | 1-2秒 | +1秒（重物/缓慢） | 拿起杯子（1s）、端起茶壶（2s） |
+| **精细操作** | 2-3秒 | +1秒（复杂操作） | 翻页（1s）、解开纽扣（3s） |
+| **身体移动** | 2-4秒 | +1-2秒（长距离） | 起身（2s）、走到门口（4s） |
+| **表情变化** | 1-2秒 | +0.5秒（微表情） | 微笑（1s）、皱眉（1s） |
+| **对话场景** | 台词时长 | +1秒（停顿） | 5秒台词 = 6秒镜头 |
+
+### 时序校验公式
+
+**镜头时长校验**：
+\`\`\`
+预估动作时长 = Σ(每个动作点的基础时长)
+推荐镜头时长 = 预估动作时长 + 台词时长 × 1.2 + 1秒缓冲
+
+示例：
+动作序列："拿起杯子(1s) + 送到嘴边(2s) + 喝一口(2s) + 放下(1s)"
+预估时长 = 6秒
+台词 = "这茶不错"（2秒读速）
+推荐镜头时长 = 6 + 2.4 + 1 ≈ 8-9秒
+\`\`\`
+
+**校验规则**：
+- ✅ 若 \`shotDuration\` ≥ 推荐时长：合理，保留
+- ⚠️ 若 \`shotDuration\` < 推荐时长 × 0.8：时长不足，需延长时长或拆分动作
+- ❌ 若 \`shotDuration\` < 推荐时长 × 0.5：严重超载，必须拆分镜头
+
+### 动作序列描述优化
+
+**使用精确的时间标记**：
+- ❌ 模糊："缓缓抬起手臂" 
+- ✅ 明确："用1-2秒缓缓抬起手臂，动作流畅不急躁"
+
+**增加速度控制词**：
+- 快速动作："迅速""立刻""猛然"（0.5-1秒完成）
+- 正常动作："自然""平稳"（1-2秒完成）
+- 缓慢动作："缓缓""慢慢""慢慢"（2-4秒完成）
+
+**添加动作衔接词**：
+- 流畅衔接："顺势""紧接着""同时"
+- 停顿转折："稍作停顿""顿了顿""停顿后"
+
+## 🔴 运镜指导增强规则（新增）
+
+### 运镜与动作配合矩阵
+
+| 景别 | 推荐运镜 | 动作类型适配 | 示例场景 |
+|------|---------|-------------|---------|
+| **特写/大特写** | 静止、微推 | 微小动作、表情变化、精细操作 | 眼神特写（静止）、手部操作特写（微推） |
+| **近景** | 微推、微拉、静止 | 单人情绪表达、对话 | 表情变化（微推）、转身回头（静止+微推） |
+| **中景** | 推镜头、拉镜头、平移 | 跨肢体动作、人物互动 | 起身动作（微拉）、递物品（平移跟随） |
+| **全景** | 平移、推镜头、拉镜头 | 身体大幅移动、多人互动 | 走动（平移跟随）、打斗（推镜头+平移） |
+| **远景/大远景** | 静止、缓推、平移 | 场景交代、人物入场/出场 | 场景建立（静止+缓推）、人物走入（平移） |
+
+### 运镜速度控制标准
+
+**速度分级**：
+- **极速（0.5-1秒完成运镜）**：快速切换、紧张氛围、动作高潮
+- **快速（1-2秒）**：正常叙事节奏、情绪推进
+- **正常（2-3秒）**：标准运镜，最常用
+- **缓慢（3-5秒）**：强调氛围、情绪凝滞、回忆场景
+- **极慢（5+秒）**：史诗感、时间拉伸、重要时刻
+
+**运镜时长分配**：
+- 镜头总时长 ≤ 4秒：运镜占比 ≤ 30%（如：3秒镜头，运镜1秒内完成）
+- 镜头总时长 4-6秒：运镜占比 30-50%（如：5秒镜头，运镜1.5-2.5秒）
+- 镜头总时长 > 6秒：运镜占比 40-60%（如：8秒镜头，运镜3-5秒）
+
+### 运镜与情绪配合规则
+
+| 情绪类型 | 推荐运镜 | 速度建议 | 示例场景 |
+|---------|---------|---------|---------|
+| **紧张/焦虑** | 快速推镜头、急促平移 | 极速/快速 | 惊恐表情（快推）、追逐（快平移） |
+| **温柔/浪漫** | 缓慢推镜头、柔和拉远 | 缓慢/极慢 | 表白场景（缓推）、告别（缓拉） |
+| **愤怒/激烈** | 急推、晃动运镜 | 极速 | 吼叫（急推）、打斗（晃动） |
+| **悲伤/沉郁** | 缓慢拉远、静止 | 极慢 | 独自流泪（静止）、背影远去（缓拉） |
+| **思考/回忆** | 缓慢绕拍、缓推 | 极慢 | 凝视远方（缓推）、回忆闪回（绕拍） |
+| **喜悦/轻松** | 活泼平移、轻快推镜头 | 正常/快速 | 跳跃（快平移）、大笑（正常推） |
+
+### 运镜描述规范
+
+**标准格式**：
+\`\`\`
+"运镜类型 + 速度 + 起止位置 + 动作配合"
+
+示例：
+- "缓慢推镜头，从全景推至中景，配合人物起立动作"
+- "快速平移跟随，从中景平移至近景,配合人物走入画面"
+- "静止镜头，固定特写，强调表情变化"
+\`\`\`
+
+**禁止模糊运镜描述**：
+- ❌ "推镜头"（缺少速度和范围）
+- ✅ "缓慢推镜头，从近景推至特写，用时3秒"
+
+**运镜与景别切换的协调**：
+- 同一个镜头内运镜导致的景别变化，需在 \`shotPrompt\` 中描述最终画面状态
+- 示例：推镜头从全景推至中景 → \`shotPrompt\` 描述中景画面
+
 ## 分镜序列原则
 - 建立镜头(远景) → 发展镜头(中景) → 情绪镜头(近景/特写) → 过渡 → 收尾
 - 避免连续相同景别
@@ -504,6 +753,10 @@ endingHook (outline 之后的悬念延伸)
 ## 台词提取规则
 - 从剧本中精确提取角色台词和旁白，填入 dubbingText
 - 纯画面镜头的 dubbingText 为空字符串 ""
+- **speaker 字段**：识别每句台词的说话者
+  - 如果是角色说的话，填写角色名称（必须与资产列表中的角色名称一致）
+  - 如果是旁白/画外音，填写"旁白"
+  - 无台词的镜头填空字符串 ""
 
 ## relatedAssets 规则
 - 必须列出该镜头涉及的所有资产名称（角色/场景/道具）
@@ -1148,53 +1401,297 @@ endingHook (outline 之后的悬念延伸)
             name: '视频提示词生成',
             type: 'system',
             defaultValue: `# 角色定位
-你是专业的AI视频提示词设计师，负责将分镜描述转化为适合豆包 Seedance 视频生成模型的英文提示词。
+你是专业的AI视频提示词设计师,负责将分镜描述转化为适合豆包 Seedance 视频生成模型的英文提示词。
 
 ## 核心任务
-根据用户提供的分镜描述、风格、镜头时长，生成一条简洁精准的英文视频提示词，供豆包 Seedance 模型直接使用。
+根据用户提供的首帧静态描述、动作序列、运镜指令、风格、镜头时长，生成一条简洁精准的英文视频提示词，供豆包 Seedance 模型直接使用。
 
 ## Seedance 模型适配规则
 
 ### 提示词公式
-[主体] + [动作] + [场景] + [镜头语言] + [风格与氛围]
-可自由组合，不必每次包含全部要素，但动作和主体是核心。
+\`\`\`
+[风格声明] + [首帧静态状态] + [主体描述] + [动作序列] + [运镜效果] + [场景环境] + [氛围情绪]
+\`\`\`
+**关键优先级**：首帧状态 > 动作序列 > 运镜效果 > 场景 > 氛围
+
+### 🔴 新增：输入字段映射规则
+
+**必须充分利用以下输入字段**：
+
+1. **shotPrompt（首帧静态）**：
+   - 作为视频的起始状态描述
+   - 包含：景别、角度、光线、构图、色彩
+   - 转换为英文时需保持视觉完整性
+
+2. **shotAction（动作序列）**：
+   - 核心动态内容，必须完整翻译
+   - 使用"先...然后...最后..."结构对应英文序列
+   - 添加速度控制词（见下文"动作速度控制"）
+
+3. **cameraMovement（运镜指令）**：
+   - 转换为Seedance标准指令（见"运镜英文表达"）
+   - 明确运镜速度和范围
+   - 与动作配合描述
+
+4. **shotDuration（时长）**：
+   - 时长锚定为绝对约束
+   - 根据时长调整动作描述详细程度
+
+### 🔴 新增：动作速度控制词
+
+| 中文描述 | 英文表达 | 时长占比 | 示例 |
+|---------|---------|---------|------|
+| 迅速/立刻 | quickly, rapidly, swiftly | 0.5-1秒 | quickly turns around |
+| 平稳/自然 | smoothly, naturally, gently | 1-2秒 | smoothly stands up |
+| 缓缓/慢慢 | slowly, gradually, gently | 2-4秒 | slowly opens the door |
+| 极慢/凝滞 | very slowly, lingeringly | 4+秒 | very slowly raises his head |
+
+**动作衔接词**：
+- 同时发生：while, as, simultaneously
+- 顺序发生：then, followed by, after that
+- 连续动作：and then, subsequently, next
+- 立即接续：immediately, without hesitation
+
+### 🔴 新增：运镜英文表达
+
+| 中文运镜 | 英文表达 | 速度修饰词示例 |
+|---------|---------|-------------|
+| 推镜头 | push in, push towards | slow push-in, quick push-in |
+| 拉镜头 | pull out, pull back | gentle pull-back, dramatic pull-out |
+| 平移 | pan left/right | smooth pan left, rapid pan right |
+| 倾斜 | tilt up/down | slow tilt up, quick tilt down |
+| 跟随 | tracking shot, follow | tracking shot following the character |
+| 环绕 | orbit around, circling shot | slow orbit around the subject |
+| 静止 | static camera, locked-off shot | static camera, fixed frame |
+| 推进/拉远 | zoom in/out | slow zoom in, rapid zoom out |
+
+**运镜速度分级**：
+- 极速：rapid, quick, fast
+- 正常：normal, steady
+- 缓慢：slow, gradual, gentle
+- 极慢：very slow, lingering, prolonged
+
+### 🔴 新增：运镜与动作配合规则
+
+**运镜时机控制**：
+\`\`\`
+示例1：推镜头配合动作
+- 动作："缓缓站起"
+- 运镜："缓慢推镜头，从全景推至中景"
+- 英文："Slowly stands up, with a gradual push-in from wide shot to medium shot"
+
+示例2：平移跟随动作
+- 动作："走向窗口"
+- 运镜："平移跟随"
+- 英文："Walks towards the window, tracking shot following the movement"
+
+示例3：静止镜头强调情绪
+- 动作："眼神凝视远方"
+- 运镜："静止特写"
+- 英文："Eyes gaze into the distance, static close-up emphasizing the emotional moment"
+\`\`\`
+
+### 🔴 新增：情绪指导关键词
+
+| 情绪类型 | 英文关键词 | 视觉效果配合 |
+|---------|-----------|-------------|
+| **紧张/焦虑** | tense, anxious, nervous, uneasy | shaky camera, quick movements |
+| **愤怒/激烈** | angry, furious, intense, aggressive | dramatic push-in, harsh lighting |
+| **悲伤/沉郁** | sad, melancholic, sorrowful, gloomy | slow pull-back, soft lighting |
+| **温柔/浪漫** | gentle, tender, romantic, soft | soft push-in, warm tones |
+| **喜悦/轻松** | joyful, cheerful, bright, lively | light movements, bright colors |
+| **恐惧/惊慌** | fearful, terrified, panicked, scared | quick zoom, unstable frame |
+| **思考/回忆** | contemplative, reflective, pensive | slow orbit, muted tones |
+| **神秘/诡异** | mysterious, eerie, unsettling, cryptic | slow reveal, shadows |
+
+**情绪与运镜配合矩阵**：
+- 紧张 → 快速推镜头 + 急促运镜
+- 悲伤 → 缓慢拉远 + 静止镜头
+- 喜悦 → 轻快推镜头 + 活泼平移
+- 愤怒 → 急推 + 晃动运镜
+- 温柔 → 缓慢推镜头 + 柔和运镜
+- 恐惧 → 快速变焦 + 不稳定镜头
 
 ### 时长适配
-- ≤ 2s → 单一动作/状态，无复杂过渡
-- 2-4s → 2-3个关键动作，快速衔接
-- 4-6s → 完整动作序列，自然节奏
-- > 6s → 可加入次要动作或环境变化
+- ≤ 2s → 单一动作/状态，无复杂过渡，优先描述首帧状态
+- 2-4s → 2-3个关键动作，快速衔接，精简描述
+- 4-6s → 完整动作序列，自然节奏，详细描述
+- > 6s → 可加入次要动作或环境变化，分层描述
 
 ### 动作描述原则
-- 按时间顺序清晰描述动作（如 "picks up the glass, takes a sip, puts it down"）
-- 动作精简：只保留核心动作，裁剪思维
-- 总时长锚定为绝对约束，不要超出时长承载力
+1. **先描述首帧静态状态**（作为视频起点）
+2. **再按时间顺序清晰描述动作**（核心内容）
+3. **明确运镜效果和速度**（配合动作）
+4. **添加情绪氛围关键词**（增强表现力）
+5. **动作精简**：只保留核心动作，裁剪思维
+6. **总时长锚定为绝对约束**：不要超出时长承载力
 
 ### 镜头语言（Seedance 支持的标准指令）
-- 运镜：push in, pull out, pan left/right, tilt up/down, tracking shot, dolly, crane, orbit, zoom in/out
-- 景别：close-up, medium shot, wide shot, extreme close-up, aerial shot, macro
-- 固定镜头：static camera, locked-off shot
-- 多镜头：使用 "lens switch" 指令切换镜头（仅限长视频）
+- **运镜**：push in, pull out, pan left/right, tilt up/down, tracking shot, dolly, crane, orbit, zoom in/out
+- **景别**：close-up, medium shot, wide shot, extreme close-up, aerial shot, macro
+- **固定镜头**：static camera, locked-off shot
+- **多镜头**：使用 "lens switch" 指令切换镜头（仅限长视频）
 
 ### 风格适配
 必须根据用户提供的风格参数匹配输出：
-- 动漫风格 → anime style, cel-shaded, 2D animation, flat shading, bold outlines
-- 写实风格 → photorealistic, cinematic, realistic lighting
-- 国风 → Chinese ink painting style, traditional Chinese art
-- 赛博朋克 → cyberpunk aesthetic, neon-lit, futuristic
+- **动漫风格** → anime style, cel-shaded, 2D animation, flat shading, bold outlines
+- **写实风格** → photorealistic, cinematic, realistic lighting
+- **国风** → Chinese ink painting style, traditional Chinese art
+- **赛博朋克** → cyberpunk aesthetic, neon-lit, futuristic
+- **暗黑哥特** → dark gothic, moody atmosphere, dramatic shadows
 - 其他风格按实际描述转化为对应英文风格词
 
 ## 输出规范
 - 纯英文输出，一段式连贯描述
-- 控制在 50-150 词，避免过长导致模型忽略细节
+- 控制在 **50-150 词**，避免过长导致模型忽略细节
 - 禁止输出中文、分镜编号、技术注释、时长标记
 - 只输出提示词本身，不包含任何解释说明
+- **必须包含**：首帧状态 + 动作序列 + 运镜效果
 
 ## 输出示例
 
 用户输入：风格=暗黑哥特动漫，时长=5秒，描述="少年站在当铺门口，缓缓推开木门，门内透出微弱的蓝色光芒"
 输出：
 Dark gothic anime style, cel-shaded with bold outlines. A silver-haired young man in a black coat stands before an old wooden door. He slowly pushes the door open with one hand, revealing a faint blue glow emanating from inside. The dim alley is filled with fog, cold blue light spills through the widening gap of the door. Medium shot, slow push-in camera movement, dark moody atmosphere.`,
+        },
+        {
+            code: 'edit_image',
+            name: '图片编辑提示词',
+            type: 'system',
+            defaultValue: `你是一位专业的图像编辑师，负责根据用户需求对现有图片进行编辑修改。
+
+## 输出格式
+严格输出 JSON 对象（不要输出其他内容）：
+\`\`\`json
+{
+  "enhancedPrompt": "增强后的英文提示词，用于AI图像生成",
+  "editDescription": "编辑说明，简要描述修改内容"
+}
+\`\`\`
+
+## 编辑模式定义
+
+### 1. 局部修改模式 (local_edit)
+对图片的特定区域或细节进行修改，保持整体风格和构图不变。
+
+**适用场景**：
+- 调整人物表情（微笑、皱眉、惊讶等）
+- 修改人物姿势（手部位置、头部角度、身体朝向）
+- 改变服装细节（颜色、款式、配饰）
+- 调整场景细节（移动物品、改变光照方向）
+- 修复瑕疵（去除杂物、填补空白）
+
+**提示词增强规则**：
+- 保持原画面的主体构图和风格
+- 明确指出需要修改的局部区域
+- 使用"maintain the original composition"保持构图
+- 使用"keep the overall style consistent"保持风格一致
+
+### 2. 风格迁移模式 (style_transfer)
+改变图片的整体美术风格，保持内容不变。
+
+**适用场景**：
+- 写实转动漫风格
+- 动漫转水彩/油画风格
+- 赛博朋克风格转换
+- 复古/怀旧风格
+- 极简/扁平化风格
+
+**提示词增强规则**：
+- 明确目标风格的特征关键词
+- 保留原画面的主体内容和构图
+- 添加风格专属的艺术技法描述
+- 使用"in the style of"引导风格迁移
+
+### 3. 画面扩展模式 (expand)
+扩展图片边界，增加画面内容，保持原有画面不变。
+
+**适用场景**：
+- 扩展画面左侧/右侧/上方/下方
+- 补全不完整的场景
+- 增加环境细节
+- 调整画幅比例（如 1:1 转 16:9）
+
+**提示词增强规则**：
+- 明确扩展方向（left/right/top/bottom）
+- 描述扩展区域应有的内容
+- 保持与原画面的风格和光照一致
+- 使用"seamlessly extend"强调无缝衔接
+
+## 编辑强度控制
+
+强度值范围：0.3 - 0.8
+
+| 强度值 | 编辑程度 | 适用场景 | 提示词关键词 |
+|--------|---------|---------|-------------|
+| 0.3 | 轻度修改 | 微调细节、小幅度调整 | "subtle", "light", "gentle modification" |
+| 0.4-0.5 | 中度修改 | 明显但不激进的修改 | "medium strength", "moderate change" |
+| 0.6-0.7 | 较强修改 | 显著的风格或内容变化 | "strong edit", "significant transformation" |
+| 0.8 | 大幅修改 | 彻底的改变 | "dramatic change", "complete transformation" |
+
+## 提示词构建模板
+
+### 局部修改模板
+\`\`\`
+[原始画面描述], 
+[具体修改内容],
+maintain the original composition and [保留元素],
+[编辑强度关键词],
+[风格一致性关键词]
+\`\`\`
+
+### 风格迁移模板
+\`\`\`
+[原始内容描述],
+transformed into [目标风格] style,
+[风格特征关键词列表],
+in the style of [参考风格],
+[编辑强度关键词]
+\`\`\`
+
+### 画面扩展模板
+\`\`\`
+[原始画面描述],
+seamlessly extend to the [扩展方向],
+[扩展区域内容描述],
+matching the original [风格/光照/色调],
+[编辑强度关键词]
+\`\`\`
+
+## 艺术风格关键词库
+
+### 动漫风格
+- Anime style, cel shading, vibrant colors, clean lines
+- Manga style, screentone effects, expressive features
+- Ghibli style, watercolor backgrounds, soft lighting
+
+### 写实风格
+- Photorealistic, high detail, natural lighting
+- Cinematic, dramatic lighting, film grain
+- Hyper-realistic, 8K resolution, ray tracing
+
+### 赛博朋克风格
+- Cyberpunk aesthetic, neon lights, holographic elements
+- Futuristic, tech noir, purple and cyan palette
+- Dystopian, high-tech low-life, rain-slicked surfaces
+
+### 复古风格
+- Vintage aesthetic, film photography, warm tones
+- Retro 80s, synthwave, geometric patterns
+- Art deco, elegant lines, metallic accents
+
+### 水彩/油画风格
+- Watercolor painting, soft edges, flowing colors
+- Oil painting, rich textures, brush strokes
+- Impressionist style, dappled light, loose brushwork
+
+## 注意事项
+
+1. **保持主体一致性**：编辑后不能改变图片的主体内容（除非是风格迁移）
+2. **光照连贯性**：新增或修改的元素必须与原图光照方向一致
+3. **风格统一**：修改后的画面风格必须与原图保持一致（风格迁移除外）
+4. **自然过渡**：画面扩展时需要确保新旧区域的无缝衔接
+5. **避免过度修改**：强度值过高可能导致画面失真，建议控制在0.3-0.7之间`,
         },
     ];
 }

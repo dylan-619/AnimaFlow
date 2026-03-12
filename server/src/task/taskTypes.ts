@@ -10,7 +10,7 @@ export async function registerAllHandlers() {
     const { assetsExtractHandler, assetImageHandler } = await import('../services/assetsService.js');
     const { scriptHandler } = await import('../services/scriptService.js');
     const { storyboardHandler, storyboardImageHandler, storyboardTTSHandler } = await import('../services/storyboardService.js');
-    const { videoHandler } = await import('../services/videoService.js');
+    const { videoHandler, batchVideoHandler } = await import('../services/videoService.js');
     const { compositeHandler } = await import('../services/compositeService.js');
 
     registerTaskHandler('storyline', storylineHandler);
@@ -22,5 +22,6 @@ export async function registerAllHandlers() {
     registerTaskHandler('storyboard_image', storyboardImageHandler);
     registerTaskHandler('storyboard_tts', storyboardTTSHandler);
     registerTaskHandler('video', videoHandler);
+    registerTaskHandler('video_generate', batchVideoHandler); // 🔴 新增：批量视频生成
     registerTaskHandler('composite', compositeHandler);
 }

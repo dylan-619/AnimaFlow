@@ -21,8 +21,6 @@
                 </el-button>
                 <el-button type="info" color="#1A1A1A" :disabled="!selectedScriptId || !canComposite"
                     @click="exportToJianying" :loading="exportingJianying">
-                    <img src="https://lf1-xgcdn-tos.pstatp.com/obj/ies.fe.lv/img/lv-logo-dark.c022de63.png"
-                        style="height: 14px; margin-right: 4px;" alt="剪映">
                     导出剪映草稿
                 </el-button>
                 <el-button type="primary" :disabled="!selectedScriptId || !canComposite" @click="startComposite">

@@ -1,7 +1,7 @@
 <template>
-    <el-dialog v-model="visible" title="分镜图片生成" width="960px" destroy-on-close :close-on-click-modal="false"
+    <el-dialog v-model="visible" title="分镜图片生成与编辑" width="960px" destroy-on-close :close-on-click-modal="false"
         class="storyboard-img-dialog">
-        <div class="modal-body" v-loading="loading" element-loading-text="正在生成图片...">
+        <div class="modal-body" v-loading="loading" :element-loading-text="loadingText">
             <div v-if="shot" class="content-wrapper">
                 <!-- 左侧面板 -->
                 <div class="left-panel">
@@ -10,6 +10,48 @@
                         <div class="shot-badge">
                             <el-tag>S{{ shot.segmentIndex }}-{{ shot.shotIndex }}</el-tag>
                             <span class="seg-desc">{{ shot.segmentDesc }}</span>
+                        </div>
+
+                        <!-- 模式切换 -->
+                        <div class="mode-section">
+                            <div class="section-header">
+                                <span class="name-pre">生成模式</span>
+                            </div>
+                            <el-radio-group v-model="editMode" size="small" class="mode-radio-group">
+                                <el-radio-button value="create">新建</el-radio-button>
+                                <el-radio-button value="local_edit">局部修改</el-radio-button>
+                                <el-radio-button value="style_transfer">风格迁移</el-radio-button>
+                                <el-radio-button value="expand">画面扩展</el-radio-button>
+                            </el-radio-group>
+                        </div>
+
+                        <!-- 编辑模式：源图片选择 -->
+                        <div v-if="editMode !== 'create'" class="source-section">
+                            <div class="section-header">
+                                <span class="name-pre">源图片</span>
+                                <span class="source-count" v-if="historyImages.length > 0">共 {{ historyImages.length }} 张</span>
+                            </div>
+                            <div v-if="historyImages.length > 0" class="source-grid">
+                                <div v-for="(img, index) in historyImages" :key="index" 
+                                    class="source-item"
+                                    :class="{ selected: selectedSourceIndex === index }"
+                                    @click="selectSourceImage(index)">
+                                    <el-image :src="`http://localhost:60000/uploads/${img}`" fit="cover" />
+                                    <div v-if="selectedSourceIndex === index" class="source-badge">
+                                        <el-icon color="#fff"><Check /></el-icon>
+                                    </div>
+                                </div>
+                            </div>
+                            <el-empty v-else description="暂无历史图片" :image-size="40" />
+                        </div>
+
+                        <!-- 编辑模式：强度滑块 -->
+                        <div v-if="editMode !== 'create'" class="strength-section">
+                            <div class="section-header">
+                                <span class="name-pre">编辑强度</span>
+                                <span class="strength-value">{{ editStrength.toFixed(1) }}</span>
+                            </div>
+                            <el-slider v-model="editStrength" :min="0.3" :max="0.8" :step="0.1" show-stops />
                         </div>
 
                         <!-- 匹配的资产 -->
@@ -34,7 +76,6 @@
                                                 {{ a.type === 'role' ? '角色' : a.type === 'scene' ? '场景' : '道具' }}
                                             </el-tag>
                                             <span>{{ a.name }}</span>
-                                            <el-tag v-if="a.publicUrl" size="small" type="success" effect="plain">有OSS</el-tag>
                                         </div>
                                         <div class="ref-desc">{{ a.intro || '无描述' }}</div>
                                     </div>
@@ -49,27 +90,27 @@
                                 <span class="name-pre">镜头描述</span>
                                 <span class="auto-hint" v-if="promptDirty">修改后失焦自动刷新资产</span>
                             </div>
-                            <el-input v-model="shotPromptText" type="textarea" :rows="3"
+                            <el-input v-model="shotPromptText" type="textarea" :rows="2"
                                 placeholder="镜头描述..." @blur="onPromptBlur" />
                         </div>
 
-                        <!-- 润色后提示词 -->
+                        <!-- 提示词 -->
                         <div class="prompt-section">
                             <div class="section-header">
-                                <span class="name-pre">绘图提示词</span>
-                                <el-button link type="primary" size="small" @click="polishPrompt"
+                                <span class="name-pre">{{ editMode === 'create' ? '绘图提示词' : '编辑描述' }}</span>
+                                <el-button v-if="editMode === 'create'" link type="primary" size="small" @click="polishPrompt"
                                     :loading="polishLoading">
                                     <el-icon class="mr-4"><MagicStick /></el-icon>智能润色
                                 </el-button>
                             </div>
-                            <el-input v-model="polishedPromptText" type="textarea" :rows="5"
-                                placeholder="点击「智能润色」自动生成，或手动编辑提示词..."
+                            <el-input v-model="polishedPromptText" type="textarea" :rows="editMode === 'create' ? 3 : 2"
+                                :placeholder="getPromptPlaceholder()"
                                 @blur="onPolishedPromptBlur" />
                         </div>
 
                         <el-button type="primary" size="large" class="generate-btn" @click="startGenerate"
                             :loading="generateLoading" style="width: 100%;">
-                            <el-icon class="mr-8"><Lightning /></el-icon> 开始生成
+                            <el-icon class="mr-8"><Lightning /></el-icon> {{ editMode === 'create' ? '开始生成' : '开始编辑' }}
                         </el-button>
                     </div>
                 </div>
@@ -125,11 +166,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { MagicStick, Lightning, Loading, Picture, Check, Refresh } from '@element-plus/icons-vue'
 import api from '../../utils/axios'
 import type { StoryboardShot } from '../../types'
+
+// 编辑模式类型
+type EditMode = 'create' | 'local_edit' | 'style_transfer' | 'expand'
 
 interface MatchedAsset {
     id: number; name: string; type: string; intro: string; filePath: string | null; publicUrl: string | null;
@@ -148,6 +192,12 @@ const polishLoading = ref(false)
 const generateLoading = ref(false)
 const saveLoading = ref(false)
 
+// 编辑模式相关
+const editMode = ref<EditMode>('create')
+const editStrength = ref(0.5)
+const selectedSourceIndex = ref(-1)
+const historyImages = ref<string[]>([])
+
 const shotPromptText = ref('')
 const polishedPromptText = ref('')
 const matchedAssets = ref<MatchedAsset[]>([])
@@ -155,6 +205,11 @@ const resultImages = ref<ImageState[]>([])
 const selectedIndex = ref(-1)
 const promptDirty = ref(false)
 let initialPrompt = ''
+
+// 计算加载文本
+const loadingText = computed(() => {
+    return editMode.value === 'create' ? '正在生成图片...' : '正在编辑图片...'
+})
 
 watch(visible, async (val) => {
     if (val && props.shot) {
@@ -165,23 +220,54 @@ watch(visible, async (val) => {
         resultImages.value = []
         selectedIndex.value = -1
         matchedAssets.value = []
+        
+        // 重置编辑模式相关状态
+        editMode.value = 'create'
+        editStrength.value = 0.5
+        selectedSourceIndex.value = -1
 
         // 加载历史图片
         let historyArr: string[] = []
         try {
             if (props.shot.history) historyArr = JSON.parse(props.shot.history)
         } catch (e) { }
+        historyImages.value = historyArr
         resultImages.value = historyArr.map(h => ({ filePath: h, state: 'success' as const }))
         if (resultImages.value.length === 0 && props.shot.filePath) {
             resultImages.value = [{ filePath: props.shot.filePath, state: 'success' }]
+            historyImages.value = [props.shot.filePath]
         }
         selectedIndex.value = resultImages.value.findIndex(item => item.filePath === props.shot?.filePath)
         if (selectedIndex.value === -1 && resultImages.value.length > 0) selectedIndex.value = 0
+        
+        // 默认选择第一个历史图片作为源图片
+        if (historyImages.value.length > 0) {
+            selectedSourceIndex.value = 0
+        }
 
         // 自动加载匹配的资产
         await loadMatchedAssets()
     }
 })
+
+// 获取提示词占位符
+function getPromptPlaceholder() {
+    switch (editMode.value) {
+        case 'local_edit':
+            return '描述您想要的修改，如：让她微笑、改变衣服颜色、调整姿势...'
+        case 'style_transfer':
+            return '描述目标风格，如：转换为赛博朋克风格、水彩画风...'
+        case 'expand':
+            return '描述扩展区域的内容，如：向右扩展展示更多场景...'
+        default:
+            return '点击「智能润色」自动生成，或手动编辑提示词...'
+    }
+}
+
+// 选择源图片
+function selectSourceImage(index: number) {
+    selectedSourceIndex.value = index
+}
 
 async function loadMatchedAssets() {
     if (!props.shot) return
@@ -256,8 +342,30 @@ function handleSelect(item: ImageState, index: number) {
     selectedIndex.value = index
 }
 
+// 获取源图片URL
+function getSourceImageUrl(): string {
+    if (selectedSourceIndex.value >= 0 && historyImages.value[selectedSourceIndex.value]) {
+        // 使用本地服务器URL
+        return `http://localhost:60000/uploads/${historyImages.value[selectedSourceIndex.value]}`
+    }
+    return ''
+}
+
 async function startGenerate() {
     if (!props.shot) return
+    
+    // 编辑模式校验
+    if (editMode.value !== 'create') {
+        if (selectedSourceIndex.value < 0) {
+            ElMessage.warning('请选择源图片')
+            return
+        }
+        if (!polishedPromptText.value) {
+            ElMessage.warning('请输入编辑描述')
+            return
+        }
+    }
+    
     generateLoading.value = true
     loading.value = true
     try {
@@ -269,36 +377,75 @@ async function startGenerate() {
         const tempIndex = resultImages.value.length
         resultImages.value.push({ filePath: '', state: 'generating' })
 
-        const res: any = await api.post('/api/task/create', {
-            type: 'storyboard_image',
-            projectId: props.shot.projectId,
-            input: { storyboardIds: [props.shot.id] },
-        })
-        const taskId = res.data.taskId
+        if (editMode.value === 'create') {
+            // 新建模式
+            const res: any = await api.post('/api/task/create', {
+                type: 'storyboard_image',
+                projectId: props.shot.projectId,
+                input: { 
+                    storyboardIds: [props.shot.id],
+                    skipExisting: false
+                },
+            })
+            const taskId = res.data.taskId
 
-        // 轮询等待
-        let completed = false
-        while (!completed) {
-            await new Promise(r => setTimeout(r, 2000))
-            const check: any = await api.post('/api/task/status', { taskId })
-            if (check.data.status === 'completed') {
-                completed = true
-                // 重新获取分镜数据以拿到最新的 filePath
-                const listRes: any = await api.post('/api/storyboard/list', { scriptId: props.shot.scriptId })
-                const updatedShot = (listRes.data || []).find((s: any) => s.id === props.shot!.id)
-                if (updatedShot?.filePath) {
-                    resultImages.value[tempIndex] = { filePath: updatedShot.filePath, state: 'success' }
-                    selectedIndex.value = tempIndex
+            // 轮询等待
+            let completed = false
+            while (!completed) {
+                await new Promise(r => setTimeout(r, 2000))
+                const check: any = await api.post('/api/task/status', { taskId })
+                if (check.data.status === 'completed') {
+                    completed = true
+                    // 重新获取分镜数据以拿到最新的 filePath
+                    const listRes: any = await api.post('/api/storyboard/list', { scriptId: props.shot.scriptId })
+                    const updatedShot = (listRes.data || []).find((s: any) => s.id === props.shot!.id)
+                    if (updatedShot?.filePath) {
+                        resultImages.value[tempIndex] = { filePath: updatedShot.filePath, state: 'success' }
+                        selectedIndex.value = tempIndex
+                        // 更新历史图片列表
+                        if (updatedShot.history) {
+                            try {
+                                historyImages.value = JSON.parse(updatedShot.history)
+                            } catch (e) {}
+                        }
+                    }
+                    ElMessage.success('图片生成成功！')
+                } else if (check.data.status === 'failed') {
+                    completed = true
+                    resultImages.value[tempIndex].state = 'failed'
+                    ElMessage.error(check.data.error || '生成失败')
                 }
-                ElMessage.success('图片生成成功！')
-            } else if (check.data.status === 'failed') {
-                completed = true
-                resultImages.value[tempIndex].state = 'failed'
-                ElMessage.error(check.data.error || '生成失败')
+            }
+        } else {
+            // 编辑模式
+            const sourceImage = getSourceImageUrl()
+            const res: any = await api.post('/api/storyboard/editImage', {
+                storyboardId: props.shot.id,
+                mode: editMode.value,
+                sourceImage,
+                editPrompt: polishedPromptText.value,
+                strength: editStrength.value
+            })
+            
+            if (res.data?.filePath) {
+                resultImages.value[tempIndex] = { filePath: res.data.filePath, state: 'success' }
+                selectedIndex.value = tempIndex
+                // 更新历史图片列表
+                if (res.data.history) {
+                    historyImages.value = res.data.history
+                }
+                ElMessage.success('图片编辑成功！')
+            } else {
+                throw new Error('编辑结果无效')
             }
         }
     } catch (e: any) {
-        ElMessage.error(e.message || '生成请求失败')
+        ElMessage.error(e.message || '请求失败')
+        // 移除生成中的占位
+        const generatingIndex = resultImages.value.findIndex(item => item.state === 'generating')
+        if (generatingIndex >= 0) {
+            resultImages.value.splice(generatingIndex, 1)
+        }
     } finally {
         generateLoading.value = false
         loading.value = false
@@ -339,37 +486,63 @@ async function handleSave() {
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .name-pre { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 
-.shot-badge { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.shot-badge { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .seg-desc { color: var(--text-secondary); font-size: 13px; }
 
-.ref-section { margin-bottom: 16px; }
-.ref-list { display: flex; flex-direction: column; gap: 8px; max-height: 160px; overflow-y: auto; }
+/* 模式选择 */
+.mode-section { margin-bottom: 16px; }
+.mode-radio-group { width: 100%; }
+.mode-radio-group :deep(.el-radio-button__inner) { width: 100%; font-size: 12px; padding: 6px 8px; }
+
+/* 源图片选择 */
+.source-section { margin-bottom: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px; }
+.source-count { font-size: 12px; color: var(--text-secondary); }
+.source-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 8px; }
+.source-item {
+    aspect-ratio: 16/9; border-radius: 6px; overflow: hidden; cursor: pointer;
+    border: 2px solid transparent; transition: all 0.2s; position: relative;
+}
+.source-item:hover { border-color: var(--el-color-primary-light-3); }
+.source-item.selected { border-color: var(--accent); }
+.source-item :deep(.el-image) { width: 100%; height: 100%; }
+.source-badge {
+    position: absolute; top: 2px; right: 2px; width: 16px; height: 16px;
+    background: var(--accent); border-radius: 50%; display: flex;
+    align-items: center; justify-content: center;
+}
+
+/* 编辑强度 */
+.strength-section { margin-bottom: 16px; }
+.strength-value { font-size: 14px; font-weight: 600; color: var(--accent); }
+
+.ref-section { margin-bottom: 12px; }
+.ref-list { display: flex; flex-direction: column; gap: 6px; max-height: 120px; overflow-y: auto; }
 .ref-item {
-    display: flex; gap: 10px; padding: 8px; background: var(--bg-secondary);
-    border-radius: 8px; border: 1px solid var(--border);
+    display: flex; gap: 8px; padding: 6px; background: var(--bg-body);
+    border-radius: 6px; border: 1px solid var(--border);
 }
 .ref-img-box {
-    width: 48px; height: 48px; border-radius: 6px; overflow: hidden;
-    flex-shrink: 0; background: var(--bg-body);
+    width: 40px; height: 40px; border-radius: 4px; overflow: hidden;
+    flex-shrink: 0; background: var(--bg-secondary);
 }
 .ref-img-box img { width: 100%; height: 100%; object-fit: cover; }
 .no-img {
     width: 100%; height: 100%; display: flex; align-items: center;
-    justify-content: center; font-size: 11px; color: var(--text-secondary);
+    justify-content: center; font-size: 10px; color: var(--text-secondary);
 }
 .ref-info { flex: 1; min-width: 0; }
-.ref-name { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
-.ref-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-name { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; }
+.ref-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.prompt-section { margin-bottom: 14px; }
+.prompt-section { margin-bottom: 10px; }
 .auto-hint { font-size: 11px; color: var(--el-color-warning); }
 .generate-btn { margin-top: auto; border-radius: 8px; font-weight: 600; }
 
 .result-card { display: flex; flex-direction: column; }
 .result-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
-.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .result-item {
-    aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; cursor: pointer;
+    aspect-ratio: 16/9; border-radius: 8px; overflow: hidden; cursor: pointer;
     position: relative; border: 2px solid transparent; transition: all 0.2s ease; background: var(--bg-body);
 }
 .result-item:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }

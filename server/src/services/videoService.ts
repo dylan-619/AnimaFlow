@@ -188,6 +188,86 @@ videoRouter.post('/api/video/selectResult', async (req: Request, res: Response) 
 
 // ---------- 任务 Handler ----------
 
+// 🔴 新增：批量视频生成处理器（用于批量生成功能）
+export async function batchVideoHandler(task: Task, updateProgress: (p: number) => Promise<void>) {
+    const input = JSON.parse(task.input || '{}');
+    const { storyboardIds, skipExisting = true } = input;
+    
+    if (!storyboardIds?.length) {
+        throw new Error('请指定分镜 ID');
+    }
+
+    console.log(`[批量视频] 开始处理 ${storyboardIds.length} 个分镜`);
+
+    // 筛选需要生成视频的分镜
+    let query = db('t_storyboard')
+        .whereIn('id', storyboardIds)
+        .whereNotNull('filePath'); // 必须有图片
+    
+    if (skipExisting) {
+        query = query.whereNull('videoPath'); // 跳过已有视频的
+    }
+
+    const shots = await query;
+    
+    if (shots.length === 0) {
+        console.log(`[批量视频] 所有分镜已有视频，跳过生成`);
+        return { count: 0, skipped: true };
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < shots.length; i++) {
+        const shot = shots[i];
+        try {
+            console.log(`[批量视频] 处理分镜 S${shot.segmentIndex}-${shot.shotIndex} (${i + 1}/${shots.length})`);
+            
+            await updateProgress(Math.round((i / shots.length) * 100));
+            
+            // 生成视频
+            const imageFileNames = [shot.filePath];
+            const { externalTaskId } = await videoGenerate({
+                prompt: shot.videoPrompt || shot.shotPrompt || '',
+                imageFileNames,
+                duration: shot.shotDuration || 5,
+                ratio: '16:9',
+                generateAudio: false,
+            });
+
+            // 写入视频记录
+            const [videoId] = await db('t_video').insert({
+                configId: null, // 批量生成不需要 configId
+                state: 0,
+                prompt: shot.videoPrompt || shot.shotPrompt,
+                duration: shot.shotDuration || 5,
+                taskId: externalTaskId,
+                scriptId: shot.scriptId,
+                createTime: Date.now(),
+            });
+
+            // 轮询等待视频生成完成
+            const videoUrl = await pollVideoTask(externalTaskId);
+            const fileName = `video_${videoId}_${Date.now()}.mp4`;
+            await downloadFile(videoUrl, fileName);
+            
+            console.log(`[批量视频] 分镜 S${shot.segmentIndex}-${shot.shotIndex} 视频下载完成: ${fileName}`);
+
+            // 更新视频记录和分镜的 videoPath
+            await db('t_video').where('id', videoId).update({ state: 1, filePath: fileName });
+            await db('t_storyboard').where('id', shot.id).update({ videoPath: fileName });
+            
+            successCount++;
+        } catch (err: any) {
+            console.error(`[批量视频] 分镜 S${shot.segmentIndex}-${shot.shotIndex} 生成失败:`, err.message);
+            failCount++;
+        }
+    }
+
+    console.log(`[批量视频] 完成: 成功 ${successCount}, 失败 ${failCount}`);
+    return { count: successCount, failed: failCount };
+}
+
 export async function videoHandler(task: Task, updateProgress: (p: number) => Promise<void>) {
     const { videoConfigId } = JSON.parse(task.input || '{}');
     if (!videoConfigId) throw new Error('请指定视频配置 ID');

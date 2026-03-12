@@ -1,32 +1,39 @@
 <template>
-  <div class="workspace page-container">
-    <!-- 顶部标题栏 -->
-    <div class="page-header">
-      <div class="flex-center gap-12">
-        <el-button @click="$router.push('/projects')"><el-icon class="mr-4">
-            <Back />
-          </el-icon>返回</el-button>
-        <h2 style="font-size: 20px;">{{ appStore.currentProject?.name || '项目' }}</h2>
+  <div class="workspace-layout">
+    <!-- 左侧悬浮工具栏 -->
+    <aside class="sidebar">
+      <!-- 顶部操作区 -->
+      <div class="sidebar-header">
+        <el-button @click="$router.push('/projects')" circle title="返回项目列表">
+          <el-icon><Back /></el-icon>
+        </el-button>
+        <h3 class="project-name" :title="appStore.currentProject?.name">
+          {{ appStore.currentProject?.name || '项目' }}
+        </h3>
       </div>
-      <el-button @click="$router.push('/setting')"><el-icon class="mr-4">
-          <Setting />
-        </el-icon>设置</el-button>
-    </div>
 
-    <!-- 顶部分步导航 -->
-    <nav class="ws-nav mt-24">
-      <router-link v-for="item in navItems" :key="item.path" :to="`/workspace/${projectId}/${item.path}`"
-        class="nav-item" :class="{ active: $route.path.includes(item.path) }">
-        <span class="nav-step">STEP {{ item.step }}</span>
-        <el-icon class="nav-icon">
-          <component :is="item.icon" />
-        </el-icon>
-        <span class="nav-label">{{ item.label }}</span>
-      </router-link>
-    </nav>
+      <!-- 垂直导航 -->
+      <nav class="sidebar-nav">
+        <router-link v-for="item in navItems" :key="item.path" :to="`/workspace/${projectId}/${item.path}`"
+          class="nav-item" :class="{ active: $route.path.includes(item.path) }">
+          <span class="nav-step">{{ item.step }}</span>
+          <el-icon class="nav-icon">
+            <component :is="item.icon" />
+          </el-icon>
+          <span class="nav-label">{{ item.label }}</span>
+        </router-link>
+      </nav>
 
-    <!-- 主体内容 -->
-    <main class="ws-content mt-16">
+      <!-- 底部设置按钮 -->
+      <div class="sidebar-footer">
+        <el-button @click="$router.push('/setting')" circle title="设置">
+          <el-icon><Setting /></el-icon>
+        </el-button>
+      </div>
+    </aside>
+
+    <!-- 右侧内容区（全屏） -->
+    <main class="main-content">
       <router-view />
     </main>
   </div>
@@ -62,34 +69,67 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.page-header {
+.workspace-layout {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.ws-nav {
-  display: flex;
+/* 左侧悬浮工具栏 */
+.sidebar {
+  width: 80px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px;
-  gap: 8px;
-  overflow-x: auto;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 100;
+}
+
+.sidebar-header {
+  padding: 16px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.project-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: center;
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .nav-item {
-  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 14px 12px;
+  padding: 12px 8px;
   border-radius: 8px;
   text-decoration: none;
   color: var(--text-secondary);
   transition: all .2s;
-  font-size: 14px;
+  font-size: 12px;
+  gap: 6px;
 }
 
 .nav-item:hover {
@@ -102,12 +142,8 @@ onMounted(async () => {
   color: var(--accent);
 }
 
-.nav-icon {
-  font-size: 16px;
-}
-
 .nav-step {
-  font-size: 11px;
+  font-size: 10px;
   background: rgba(255, 255, 255, 0.05);
   padding: 2px 6px;
   border-radius: 4px;
@@ -118,16 +154,30 @@ onMounted(async () => {
   background: rgba(99, 102, 241, .2);
 }
 
-.nav-label {
-  font-weight: 500;
-  white-space: nowrap;
+.nav-icon {
+  font-size: 18px;
 }
 
-.ws-content {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+.nav-label {
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.sidebar-footer {
+  padding: 16px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: center;
+}
+
+/* 右侧内容区（全屏） */
+.main-content {
+  flex: 1;
+  margin-left: 80px;
+  overflow-y: auto;
+  background: var(--bg-primary);
   padding: 24px;
-  min-height: calc(100vh - 200px);
+  box-sizing: border-box;
 }
 </style>

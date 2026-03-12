@@ -89,6 +89,8 @@ export interface Asset {
     type: 'role' | 'scene' | 'props';
     filePath: string | null;
     publicUrl: string | null;
+    voiceType?: string | null; // 角色的配音音色（仅type=role时使用）
+    defaultEmotion?: string | null; // 角色的默认情绪（仅type=role时使用）
     isMasterReference: number;
     projectId: number;
 }
@@ -103,6 +105,9 @@ export interface Storyboard {
     cameraMovement?: string | null;
     shotPrompt: string | null;
     dubbingText: string | null;
+    dubbingVoice?: string | null; // 配音音色
+    dubbingEmotion?: string | null; // 配音情绪
+    speaker?: string | null; // 说话者（角色名或"旁白"）
     filePath: string | null;
     publicUrl: string | null;
     audioPath: string | null;

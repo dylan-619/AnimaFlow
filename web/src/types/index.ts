@@ -72,6 +72,8 @@ export interface Asset {
     filePath: string | null
     publicUrl: string | null
     history?: string | null
+    voiceType?: string | null // 角色的配音音色（仅type=role时使用）
+    defaultEmotion?: string | null // 角色的默认情绪（仅type=role时使用）
     isMasterReference: number
     projectId: number
 }
@@ -88,10 +90,13 @@ export interface StoryboardShot {
     shotPrompt: string | null
     dubbingText: string | null
     dubbingVoice?: string | null
-    filePath: string | null
-    publicUrl: string | null
+    dubbingEmotion?: string | null // 配音情绪
+    speaker?: string | null // 说话者（角色名或"旁白"）
+    filePath: string | null // 当前使用的图片路径
+    publicUrl: string | null // 当前使用的图片公网URL
     audioPath: string | null
-    history?: string | null
+    videoPath?: string | null
+    history?: string | null // 所有生成历史图片的数组（JSON字符串）
     videoPrompt?: string | null
     polishedPrompt?: string | null
     relatedAssets?: string | null

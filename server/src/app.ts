@@ -22,6 +22,9 @@ import scriptRouter from './routes/script.js';
 import storyboardRouter from './routes/storyboard.js';
 import videoRouter from './routes/video.js';
 import exportRouter from './routes/export.js';
+import { batchRouter } from './services/batchService.js'; // 🔴 新增：批量生成路由
+import { qualityRouter } from './services/qualityAssessmentService.js'; // 🔴 新增：质量评估路由
+import { modelComparisonRouter } from './services/modelComparisonService.js'; // 🔴 新增：模型对比路由
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,6 +67,9 @@ async function main() {
     app.use(storyboardRouter);
     app.use(videoRouter);
     app.use(exportRouter);
+    app.use(batchRouter); // 🔴 新增：批量生成路由
+    app.use(qualityRouter); // 🔴 新增：质量评估路由
+    app.use(modelComparisonRouter); // 🔴 新增：模型对比路由
 
     // SPA fallback — 非 API 请求返回 index.html
     app.use((req, res, next) => {

@@ -1,8 +1,9 @@
 import db from '../db/index.js';
 import { textGenerate } from '../ai/text.js';
-import { imageGenerate } from '../ai/image.js';
+import { imageGenerate, editImage } from '../ai/image.js';
 import { getPrompt, extractJSON } from '../utils/helpers.js';
 import type { Task } from '../types/index.js';
+import type { EditMode } from '../ai/image.js';
 
 // ---------- 路由层 ----------
 import { Router, Request, Response } from 'express';
@@ -60,6 +61,79 @@ assetsRouter.post('/api/assets/polishPrompt', async (req: Request, res: Response
         await db('t_assets').where('id', assetId).update({ prompt });
         res.json({ code: 0, data: { prompt } });
     } catch (err: any) { res.json({ code: -1, msg: err.message }); }
+});
+
+// 🔴 新增：资产图片编辑接口
+assetsRouter.post('/api/assets/editImage', async (req: Request, res: Response) => {
+    try {
+        const { assetId, mode, sourceImage, editPrompt, strength = 0.5 } = req.body;
+        
+        if (!assetId || !mode || !sourceImage || !editPrompt) {
+            res.json({ code: -1, msg: '缺少必要参数' });
+            return;
+        }
+
+        const asset = await db('t_assets').where('id', assetId).first();
+        if (!asset) {
+            res.json({ code: -1, msg: '资产不存在' });
+            return;
+        }
+
+        // 获取项目信息以确定图片尺寸
+        const project = await db('t_project').where('id', asset.projectId).first();
+        
+        // 确定图片尺寸
+        let imgWidth = 1024;
+        let imgHeight = 1024;
+        if (asset.type === 'scene') {
+            imgWidth = 2560;
+            imgHeight = 1440;
+        }
+
+        // 调用图片编辑接口
+        const results = await editImage({
+            mode: mode as EditMode,
+            sourceImage,
+            editPrompt,
+            strength: Math.max(0.3, Math.min(0.8, strength)),
+        }, {
+            prefix: `asset_edit_${assetId}`,
+            width: imgWidth,
+            height: imgHeight,
+            ossDir: 'assets',
+        });
+
+        // 更新历史记录
+        let historyArr: string[] = [];
+        try {
+            historyArr = JSON.parse(asset.history || '[]');
+        } catch (e) { }
+
+        const filePath = results[0].fileName;
+        const publicUrl = results[0].publicUrl || null;
+        
+        if (!historyArr.includes(filePath)) {
+            historyArr.unshift(filePath);
+        }
+
+        // 更新资产
+        await db('t_assets').where('id', assetId).update({
+            filePath,
+            publicUrl,
+            history: JSON.stringify(historyArr),
+        });
+
+        res.json({ 
+            code: 0, 
+            data: { 
+                filePath, 
+                publicUrl, 
+                history: historyArr 
+            } 
+        });
+    } catch (err: any) { 
+        res.json({ code: -1, msg: err.message }); 
+    }
 });
 
 // ---------- 任务 Handlers ----------
