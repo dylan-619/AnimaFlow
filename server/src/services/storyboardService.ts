@@ -22,7 +22,26 @@ storyboardRouter.post('/api/storyboard/list', async (req: Request, res: Response
     try {
         const { scriptId } = req.body;
         const list = await db('t_storyboard').where('scriptId', scriptId).orderBy('segmentIndex').orderBy('shotIndex');
-        res.json({ code: 0, data: list });
+        
+        // 解析history字段为historyData（包含OSS地址）
+        const listWithHistoryData = list.map((item: any) => {
+            let historyData = null;
+            try {
+                if (item.history) {
+                    const parsed = JSON.parse(item.history);
+                    // 判断是否为新格式（对象数组）
+                    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object' && 'fileName' in parsed[0]) {
+                        historyData = parsed;
+                    } else if (Array.isArray(parsed)) {
+                        // 旧格式字符串数组，转换为新格式
+                        historyData = parsed.map((h: string) => ({ fileName: h, publicUrl: item.publicUrl }));
+                    }
+                }
+            } catch (e) { }
+            return { ...item, historyData };
+        });
+        
+        res.json({ code: 0, data: listWithHistoryData });
     } catch (err: any) { res.json({ code: -1, msg: err.message }); }
 });
 
@@ -179,16 +198,16 @@ storyboardRouter.post('/api/storyboard/editImage', async (req: Request, res: Res
         // 获取项目信息以确定图片尺寸
         const project = await db('t_project').where('id', shot.projectId).first();
         const videoRatio = project?.videoRatio || '16:9';
-        
-        // 根据视频比例计算图片尺寸
+
+        // 根据视频比例计算图片尺寸 - 提升至2K级别
         const dimensionMap: Record<string, [number, number]> = {
-            '9:16': [720, 1280],
-            '16:9': [1280, 720],
-            '1:1': [1080, 1080],
-            '3:4': [810, 1080],
-            '4:3': [1080, 810],
+            '9:16': [1080, 1920],
+            '16:9': [2560, 1440],
+            '1:1': [2048, 2048],
+            '3:4': [1620, 2160],
+            '4:3': [2160, 1620],
         };
-        const [imgWidth, imgHeight] = dimensionMap[videoRatio] || [1280, 720];
+        const [imgWidth, imgHeight] = dimensionMap[videoRatio] || [2560, 1440];
 
         // 调用图片编辑接口
         const results = await editImage({
@@ -203,17 +222,30 @@ storyboardRouter.post('/api/storyboard/editImage', async (req: Request, res: Res
             ossDir: 'storyboard',
         });
 
-        // 更新历史记录
-        let historyArr: string[] = [];
+        // 更新历史记录 - 存储对象数组，包含文件名和OSS地址
+        let historyArr: Array<{fileName: string; publicUrl: string | null}> = [];
         try {
-            historyArr = JSON.parse(shot.history || '[]');
+            const oldHistory = JSON.parse(shot.history || '[]');
+            // 兼容旧格式（字符串数组）
+            historyArr = oldHistory.map((h: any) => {
+                if (typeof h === 'string') {
+                    return { fileName: h, publicUrl: null };
+                }
+                return h;
+            });
         } catch (e) { }
 
         const filePath = results[0].fileName;
         const publicUrl = results[0].publicUrl || null;
         
-        if (!historyArr.includes(filePath)) {
-            historyArr.unshift(filePath);
+        // 检查是否已存在相同文件名的记录，有则更新publicUrl，无则新增
+        const existingIndex = historyArr.findIndex(h => h.fileName === filePath);
+        const newRecord = { fileName: filePath, publicUrl };
+        
+        if (existingIndex >= 0) {
+            historyArr[existingIndex] = newRecord;
+        } else {
+            historyArr.unshift(newRecord);
         }
 
         // 更新分镜
@@ -223,12 +255,16 @@ storyboardRouter.post('/api/storyboard/editImage', async (req: Request, res: Res
             history: JSON.stringify(historyArr),
         });
 
+        // 返回给前端时转换为字符串数组格式（兼容旧版）
+        const historyForFrontend = historyArr.map(h => h.fileName);
+        
         res.json({ 
             code: 0, 
             data: { 
                 filePath, 
                 publicUrl, 
-                history: historyArr 
+                history: historyForFrontend,
+                historyData: historyArr  // 新增：包含OSS地址的详细历史
             } 
         });
     } catch (err: any) { 
@@ -465,16 +501,16 @@ export async function storyboardImageHandler(task: Task, updateProgress: (p: num
 
         console.log(`[分镜图] 参考图注入: ${referenceImages.length}张, 权重=${referenceStrength}, 类型=${[...new Set(sortedAssets.map((a: any) => a.type))].join(',')}`);
 
-        // 7. 根据项目 videoRatio 计算分镜图宽高
+        // 7. 根据项目 videoRatio 计算分镜图宽高 - 提升至2K级别
         const videoRatio = project?.videoRatio || '16:9';
         const dimensionMap: Record<string, [number, number]> = {
-            '9:16': [720, 1280],
-            '16:9': [1280, 720],
-            '1:1': [1080, 1080],
-            '3:4': [810, 1080],
-            '4:3': [1080, 810],
+            '9:16': [1080, 1920],
+            '16:9': [2560, 1440],
+            '1:1': [2048, 2048],
+            '3:4': [1620, 2160],
+            '4:3': [2160, 1620],
         };
-        const [imgWidth, imgHeight] = dimensionMap[videoRatio] || [1280, 720];
+        const [imgWidth, imgHeight] = dimensionMap[videoRatio] || [2560, 1440];
 
         // 8. 生成图片（传入参考图 URL 和权重参数以保持视觉一致性）
         const results = await imageGenerate(polished, {

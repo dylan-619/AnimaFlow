@@ -16,7 +16,26 @@ assetsRouter.post('/api/assets/list', async (req: Request, res: Response) => {
         let query = db('t_assets').where('projectId', projectId);
         if (type) query = query.where('type', type);
         const list = await query.orderBy('id');
-        res.json({ code: 0, data: list });
+        
+        // 解析history字段为historyData（包含OSS地址）
+        const listWithHistoryData = list.map((item: any) => {
+            let historyData = null;
+            try {
+                if (item.history) {
+                    const parsed = JSON.parse(item.history);
+                    // 判断是否为新格式（对象数组）
+                    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object' && 'fileName' in parsed[0]) {
+                        historyData = parsed;
+                    } else if (Array.isArray(parsed)) {
+                        // 旧格式字符串数组，转换为新格式
+                        historyData = parsed.map((h: string) => ({ fileName: h, publicUrl: item.publicUrl }));
+                    }
+                }
+            } catch (e) { }
+            return { ...item, historyData };
+        });
+        
+        res.json({ code: 0, data: listWithHistoryData });
     } catch (err: any) { res.json({ code: -1, msg: err.message }); }
 });
 
@@ -82,11 +101,11 @@ assetsRouter.post('/api/assets/editImage', async (req: Request, res: Response) =
         // 获取项目信息以确定图片尺寸
         const project = await db('t_project').where('id', asset.projectId).first();
         
-        // 确定图片尺寸
-        let imgWidth = 1024;
-        let imgHeight = 1024;
+        // 确定图片尺寸 - 提升至2K级别
+        let imgWidth = 1920;  // 默认2K
+        let imgHeight = 1920;
         if (asset.type === 'scene') {
-            imgWidth = 2560;
+            imgWidth = 2560;  // 2K分辨率
             imgHeight = 1440;
         }
 
@@ -103,17 +122,39 @@ assetsRouter.post('/api/assets/editImage', async (req: Request, res: Response) =
             ossDir: 'assets',
         });
 
-        // 更新历史记录
-        let historyArr: string[] = [];
+        // 更新历史记录 - 存储对象数组，包含文件名和OSS地址
+        let historyArr: Array<{fileName: string; publicUrl: string | null}> = [];
         try {
-            historyArr = JSON.parse(asset.history || '[]');
+            const oldHistory = JSON.parse(asset.history || '[]');
+            // 兼容旧格式（字符串数组或已损坏的格式）
+            if (Array.isArray(oldHistory) && oldHistory.length > 0) {
+                // 判断是否已经是新格式
+                if (typeof oldHistory[0] === 'object' && 'fileName' in oldHistory[0]) {
+                    historyArr = oldHistory.map((h: any) => ({
+                        fileName: typeof h.fileName === 'string' ? h.fileName : '',
+                        publicUrl: h.publicUrl || null
+                    }));
+                } else {
+                    // 转换旧格式字符串数组
+                    historyArr = oldHistory.map((h: any) => {
+                        const fileName = typeof h === 'string' ? h : (h.fileName || '');
+                        return { fileName, publicUrl: null };
+                    });
+                }
+            }
         } catch (e) { }
 
         const filePath = results[0].fileName;
         const publicUrl = results[0].publicUrl || null;
-        
-        if (!historyArr.includes(filePath)) {
-            historyArr.unshift(filePath);
+
+        // 检查是否已存在相同文件名的记录，有则更新publicUrl，无则新增
+        const existingIndex = historyArr.findIndex(h => h.fileName === filePath);
+        const newRecord = { fileName: filePath, publicUrl };
+
+        if (existingIndex >= 0) {
+            historyArr[existingIndex] = newRecord;
+        } else {
+            historyArr.unshift(newRecord);
         }
 
         // 更新资产
@@ -123,12 +164,16 @@ assetsRouter.post('/api/assets/editImage', async (req: Request, res: Response) =
             history: JSON.stringify(historyArr),
         });
 
+        // 返回给前端时转换为字符串数组格式（兼容旧版）
+        const historyForFrontend = historyArr.map(h => h.fileName);
+        
         res.json({ 
             code: 0, 
             data: { 
                 filePath, 
                 publicUrl, 
-                history: historyArr 
+                history: historyForFrontend,
+                historyData: historyArr  // 新增：包含OSS地址的详细历史
             } 
         });
     } catch (err: any) { 
@@ -158,7 +203,7 @@ export async function assetsExtractHandler(task: Task, updateProgress: (p: numbe
     await updateProgress(20);
 
     const result = await textGenerate(
-        [{ role: 'system', content: systemPrompt }, { role: 'user', content: `从以下大纲中提取所有资产：${styleHint}\n\n【提取规则补充】\n1. 请将不同场景中出现的同类物理资产（如“笔记本电脑”和“台式机”、“手机”和“智能手机”等）合并为更通用的实体概念（例如统一成“电脑”、“手机”），提取为一个资产即可，避免生成重复或冲突的资产。\n\n${outlinesText}` }],
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: `从以下大纲中提取所有资产：${styleHint}\n\n【提取规则补充】\n1. 请将不同场景中出现的同类物理资产（如"笔记本电脑"和"台式机"、"手机"和"智能手机"等）合并为更通用的实体概念（例如统一成"电脑"、"手机"），提取为一个资产即可，避免生成重复或冲突的资产。\n2. 【场景资产提取重点】：对于场景资产，必须详细描述：建筑风格与年代感、空间大小、墙体结构（明确墙壁的位置和数量）、门窗位置（明确门窗在墙面上的具体位置：左侧/右侧/中央）、核心陈设道具、光线类型及方向、整体色调基础与环境氛围。特别强调空间布局的合理性，避免"门在窗子上"等不合理布局。\n\n${outlinesText}` }],
         { responseFormat: 'json' },
     );
 
@@ -214,23 +259,49 @@ export async function assetImageHandler(task: Task, updateProgress: (p: number) 
     }
     await updateProgress(30);
 
-    // 生成图片
+    // 生成图片 - 提升分辨率至2K级别
     const imgOpts: any = { prefix: `asset_${assetId}`, ossDir: 'assets' };
     if (asset.type === 'scene') {
-        imgOpts.width = 2560;
+        imgOpts.width = 2560;  // 2K分辨率
         imgOpts.height = 1440;
+    } else {
+        // 角色和道具也提升至2K
+        imgOpts.width = 1920;
+        imgOpts.height = 1920;
     }
     const results = await imageGenerate(prompt, imgOpts);
     await updateProgress(90);
 
     const filePath = results[0].fileName;
     const publicUrl = results[0].publicUrl || null;
-    let historyArr: string[] = [];
+    
+    // 统一使用新格式：对象数组，包含fileName和publicUrl
+    let historyArr: Array<{fileName: string; publicUrl: string | null}> = [];
     try {
-        historyArr = JSON.parse(asset.history || '[]');
+        const oldHistory = JSON.parse(asset.history || '[]');
+        // 兼容旧格式（字符串数组）
+        if (Array.isArray(oldHistory) && oldHistory.length > 0) {
+            // 判断是否已经是新格式
+            if (typeof oldHistory[0] === 'object' && 'fileName' in oldHistory[0]) {
+                historyArr = oldHistory;
+            } else {
+                // 转换旧格式
+                historyArr = oldHistory.map((h: any) => ({ 
+                    fileName: typeof h === 'string' ? h : h.fileName || '', 
+                    publicUrl: typeof h === 'string' ? item.publicUrl : (h.publicUrl || null) 
+                }));
+            }
+        }
     } catch (e) { }
-    if (!historyArr.includes(filePath)) {
-        historyArr.unshift(filePath);
+    
+    // 检查是否已存在相同文件名的记录
+    const existingIndex = historyArr.findIndex(h => h.fileName === filePath);
+    const newRecord = { fileName: filePath, publicUrl };
+    
+    if (existingIndex >= 0) {
+        historyArr[existingIndex] = newRecord;
+    } else {
+        historyArr.unshift(newRecord);
     }
 
     await db('t_assets').where('id', assetId).update({ filePath, publicUrl, history: JSON.stringify(historyArr) });

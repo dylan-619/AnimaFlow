@@ -85,7 +85,7 @@ const appStore = useAppStore()
 const projects = ref<Project[]>([])
 const showCreate = ref(false)
 const editingProject = ref<Project | null>(null)
-const form = ref({ name: '', intro: '', type: '', artStyle: '', styleGuide: '', videoRatio: '16:9' })
+const form = ref({ name: '', intro: '', type: '', artStyle: '动漫', styleGuide: '', videoRatio: '16:9' })
 
 onMounted(loadProjects)
 
@@ -124,7 +124,7 @@ async function submitProject() {
   }
   showCreate.value = false
   editingProject.value = null
-  form.value = { name: '', intro: '', type: '', artStyle: '', styleGuide: '', videoRatio: '16:9' }
+  form.value = { name: '', intro: '', type: '', artStyle: '动漫', styleGuide: '', videoRatio: '16:9' }
   loadProjects()
 }
 </script>

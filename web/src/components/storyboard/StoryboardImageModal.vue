@@ -197,6 +197,7 @@ const editMode = ref<EditMode>('create')
 const editStrength = ref(0.5)
 const selectedSourceIndex = ref(-1)
 const historyImages = ref<string[]>([])
+const historyData = ref<Array<{ fileName: string; publicUrl: string | null }>>([]) // 历史图片详细信息（含OSS地址）
 
 const shotPromptText = ref('')
 const polishedPromptText = ref('')
@@ -226,12 +227,22 @@ watch(visible, async (val) => {
         editStrength.value = 0.5
         selectedSourceIndex.value = -1
 
-        // 加载历史图片
+        // 加载历史图片 - 优先使用historyData（包含OSS地址）
         let historyArr: string[] = []
+        let historyDetailArr: Array<{ fileName: string; publicUrl: string | null }> = []
         try {
-            if (props.shot.history) historyArr = JSON.parse(props.shot.history)
+            // 优先读取新的historyData格式
+            if (props.shot.historyData) {
+                historyDetailArr = props.shot.historyData
+                historyArr = historyDetailArr.map(h => h.fileName)
+            } else if (props.shot.history) {
+                // 兼容旧格式（纯字符串数组）
+                historyArr = JSON.parse(props.shot.history)
+                historyDetailArr = historyArr.map(h => ({ fileName: h, publicUrl: props.shot?.publicUrl }))
+            }
         } catch (e) { }
         historyImages.value = historyArr
+        historyData.value = historyDetailArr
         resultImages.value = historyArr.map(h => ({ filePath: h, state: 'success' as const }))
         if (resultImages.value.length === 0 && props.shot.filePath) {
             resultImages.value = [{ filePath: props.shot.filePath, state: 'success' }]
@@ -342,11 +353,21 @@ function handleSelect(item: ImageState, index: number) {
     selectedIndex.value = index
 }
 
-// 获取源图片URL
+// 获取源图片URL - 优先使用OSS地址
 function getSourceImageUrl(): string {
-    if (selectedSourceIndex.value >= 0 && historyImages.value[selectedSourceIndex.value]) {
-        // 使用本地服务器URL
-        return `http://localhost:60000/uploads/${historyImages.value[selectedSourceIndex.value]}`
+    if (selectedSourceIndex.value >= 0) {
+        const historyItem = historyData.value[selectedSourceIndex.value]
+        
+        // 优先使用OSS地址
+        if (historyItem?.publicUrl) {
+            return historyItem.publicUrl
+        }
+        
+        // 如果没有OSS地址，使用本地服务器URL
+        const selectedFileName = historyImages.value[selectedSourceIndex.value]
+        if (selectedFileName) {
+            return `http://localhost:60000/uploads/${selectedFileName}`
+        }
     }
     return ''
 }
@@ -433,6 +454,10 @@ async function startGenerate() {
                 // 更新历史图片列表
                 if (res.data.history) {
                     historyImages.value = res.data.history
+                }
+                // 更新历史详细数据（包含OSS地址）
+                if (res.data.historyData) {
+                    historyData.value = res.data.historyData
                 }
                 ElMessage.success('图片编辑成功！')
             } else {

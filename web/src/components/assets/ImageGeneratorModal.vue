@@ -26,13 +26,14 @@
                                 <span class="optional-tag" v-if="historyImages.length > 0">从历史中选择</span>
                             </div>
                             
-                            <!-- 历史图片选择 -->
-                            <div v-if="historyImages.length > 0" class="source-grid">
-                                <div v-for="(img, index) in historyImages" :key="index" 
+                            <!-- 历史图片选择 - 优先使用 historyData 的 publicUrl -->
+                            <div v-if="historyData.length > 0" class="source-grid">
+                                <div v-for="(item, index) in historyData" :key="index" 
                                     class="source-item"
                                     :class="{ selected: selectedSourceIndex === index }"
                                     @click="selectSourceImage(index)">
-                                    <el-image :src="`http://localhost:60000/uploads/${img}`" fit="cover" />
+                                    <!-- 优先使用 OSS publicUrl，否则使用本地路径 -->
+                                    <el-image :src="item.publicUrl || `http://localhost:60000/uploads/${item.fileName}`" fit="cover" />
                                     <div v-if="selectedSourceIndex === index" class="source-badge">
                                         <el-icon color="#fff"><Check /></el-icon>
                                     </div>
@@ -207,6 +208,7 @@ const editMode = ref<EditMode>('create')
 const editStrength = ref(0.5)
 const selectedSourceIndex = ref(-1)
 const historyImages = ref<string[]>([])
+const historyData = ref<Array<{ fileName: string; publicUrl: string | null }>>([]) // 历史图片详细信息（含OSS地址）
 
 const promptText = ref('')
 const introText = ref('')
@@ -235,15 +237,30 @@ watch(visible, (val) => {
         editStrength.value = 0.5
         selectedSourceIndex.value = -1
 
-        // 解析历史图片
+        // 解析历史图片 - 优先使用historyData（包含OSS地址）
         let historyArr: string[] = []
+        let historyDetailArr: Array<{ fileName: string; publicUrl: string | null }> = []
+        
+        console.log('[资产编辑弹窗] props.asset:', props.asset)
+        
         try {
-            if (props.asset.history) {
+            // 优先读取新的historyData格式
+            if (props.asset.historyData) {
+                historyDetailArr = props.asset.historyData
+                historyArr = historyDetailArr.map(h => h.fileName)
+                console.log('[资产编辑弹窗] 使用historyData:', historyDetailArr)
+            } else if (props.asset.history) {
+                // 兼容旧格式（纯字符串数组）
                 historyArr = JSON.parse(props.asset.history)
+                historyDetailArr = historyArr.map(h => ({ fileName: h, publicUrl: props.asset?.publicUrl }))
+                console.log('[资产编辑弹窗] 使用旧history格式:', historyDetailArr)
             }
-        } catch (e) { }
+        } catch (e) { 
+            console.error('[资产编辑弹窗] 解析历史失败:', e) 
+        }
 
         historyImages.value = historyArr
+        historyData.value = historyDetailArr
         resultImages.value = historyArr.map(h => ({ filePath: h, state: 'success' }))
 
         if (resultImages.value.length === 0 && props.asset.filePath) {
@@ -284,6 +301,16 @@ function getPromptPlaceholder() {
 function selectSourceImage(index: number) {
     selectedSourceIndex.value = index
     sampleImage.value = '' // 清除上传的图片
+    
+    // 调试日志：打印选中的源图片信息
+    const historyItem = historyData.value[index]
+    const localUrl = historyImages.value[index]
+    console.log('[源图片选择]', {
+        index,
+        fileName: localUrl,
+        ossUrl: historyItem?.publicUrl,
+        historyData: historyData.value
+    })
 }
 
 async function changeFile() {
@@ -335,19 +362,29 @@ function removeResult(index: number) {
     resultImages.value.splice(index, 1);
 }
 
-// 获取源图片URL
+// 获取源图片URL - 优先使用OSS地址
 function getSourceImageUrl(): string {
+    // 上传的新图片优先返回
     if (sampleImage.value) {
         return sampleImage.value
     }
-    if (selectedSourceIndex.value >= 0 && historyImages.value[selectedSourceIndex.value]) {
-        // 如果配置了OSS，使用公网URL
-        if (props.asset?.publicUrl) {
-            return props.asset.publicUrl
+    
+    // 从历史图片中选择 - 优先使用OSS地址
+    if (selectedSourceIndex.value >= 0) {
+        const historyItem = historyData.value[selectedSourceIndex.value]
+        
+        // 优先使用OSS地址
+        if (historyItem?.publicUrl) {
+            return historyItem.publicUrl
         }
-        // 否则使用本地服务器URL
-        return `http://localhost:60000/uploads/${historyImages.value[selectedSourceIndex.value]}`
+        
+        // 如果没有OSS地址，使用本地服务器URL
+        const selectedFileName = historyImages.value[selectedSourceIndex.value]
+        if (selectedFileName) {
+            return `http://localhost:60000/uploads/${selectedFileName}`
+        }
     }
+    
     return ''
 }
 
@@ -426,6 +463,10 @@ async function startGenerate() {
                 // 更新历史图片列表
                 if (res.data.history) {
                     historyImages.value = res.data.history
+                }
+                // 更新历史详细数据（包含OSS地址）
+                if (res.data.historyData) {
+                    historyData.value = res.data.historyData
                 }
                 ElMessage.success('图片编辑成功!');
             } else {

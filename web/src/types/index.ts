@@ -72,6 +72,7 @@ export interface Asset {
     filePath: string | null
     publicUrl: string | null
     history?: string | null
+    historyData?: Array<{ fileName: string; publicUrl: string | null }> // 历史图片详细信息
     voiceType?: string | null // 角色的配音音色（仅type=role时使用）
     defaultEmotion?: string | null // 角色的默认情绪（仅type=role时使用）
     isMasterReference: number
@@ -97,6 +98,7 @@ export interface StoryboardShot {
     audioPath: string | null
     videoPath?: string | null
     history?: string | null // 所有生成历史图片的数组（JSON字符串）
+    historyData?: Array<{ fileName: string; publicUrl: string | null }> // 历史图片详细信息
     videoPrompt?: string | null
     polishedPrompt?: string | null
     relatedAssets?: string | null
