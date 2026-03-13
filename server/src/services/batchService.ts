@@ -46,26 +46,26 @@ export async function batchGenerateStoryboardImages(
     console.log(`[批量分镜图] 找到 ${shots.length} 个待生成分镜`);
 
     // 创建批量任务
-    const taskIds: string[] = [];
+    const taskIds: number[] = [];
     for (let i = 0; i < shots.length; i += concurrency) {
         const batch = shots.slice(i, i + concurrency);
-        
-        const [task] = await db('t_task').insert({
+
+        const [id] = await db('t_task').insert({
             projectId,
             type: 'storyboard_image',
-            input: JSON.stringify({ 
-                storyboardIds: batch.map(s => s.id) 
+            input: JSON.stringify({
+                storyboardIds: batch.map(s => s.id)
             }),
             status: 'pending',
             priority: 5,
             createdAt: Date.now(),
-        }).returning('id');
+        });
 
-        taskIds.push(task.id || task);
+        taskIds.push(id);
     }
 
     // 批量入队
-    await taskRunner.enqueueBatch(taskIds, { concurrency });
+    await taskRunner.enqueueBatch(taskIds as number[], { concurrency });
 
     console.log(`[批量分镜图] 已创建 ${taskIds.length} 个批量任务`);
 
@@ -119,26 +119,26 @@ export async function batchGenerateVideos(
     console.log(`[批量视频] 找到 ${shots.length} 个待生成视频`);
 
     // 创建批量任务（视频生成并行度较低，避免API限流）
-    const taskIds: string[] = [];
+    const taskIds: number[] = [];
     for (let i = 0; i < shots.length; i += concurrency) {
         const batch = shots.slice(i, i + concurrency);
 
-        const [task] = await db('t_task').insert({
+        const [id] = await db('t_task').insert({
             projectId,
             type: 'video_generate',
-            input: JSON.stringify({ 
-                storyboardIds: batch.map(s => s.id) 
+            input: JSON.stringify({
+                storyboardIds: batch.map(s => s.id)
             }),
             status: 'pending',
             priority: 8,
             createdAt: Date.now(),
-        }).returning('id');
+        });
 
-        taskIds.push(task.id || task);
+        taskIds.push(id);
     }
 
     // 批量入队
-    await taskRunner.enqueueBatch(taskIds, { concurrency });
+    await taskRunner.enqueueBatch(taskIds as number[], { concurrency });
 
     console.log(`[批量视频] 已创建 ${taskIds.length} 个批量任务`);
 
@@ -191,26 +191,26 @@ export async function batchGenerateAssetImages(
     console.log(`[批量资产图] 找到 ${assets.length} 个待生成资产`);
 
     // 创建批量任务
-    const taskIds: string[] = [];
+    const taskIds: number[] = [];
     for (let i = 0; i < assets.length; i += concurrency) {
         const batch = assets.slice(i, i + concurrency);
 
-        const [task] = await db('t_task').insert({
+        const [id] = await db('t_task').insert({
             projectId,
             type: 'asset_image',
-            input: JSON.stringify({ 
-                assetIds: batch.map(a => a.id) 
+            input: JSON.stringify({
+                assetIds: batch.map(a => a.id)
             }),
             status: 'pending',
             priority: 4,
             createdAt: Date.now(),
-        }).returning('id');
+        });
 
-        taskIds.push(task.id || task);
+        taskIds.push(id);
     }
 
     // 批量入队
-    await taskRunner.enqueueBatch(taskIds, { concurrency });
+    await taskRunner.enqueueBatch(taskIds as number[], { concurrency });
 
     return {
         totalAssets: assets.length,

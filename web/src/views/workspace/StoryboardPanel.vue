@@ -429,10 +429,17 @@ async function updateShot(shot: StoryboardShot) {
   await api.post('/api/storyboard/update', { id: shot.id, shotPrompt: shot.shotPrompt, shotAction: shot.shotAction, dubbingText: shot.dubbingText, dubbingVoice: shot.dubbingVoice, dubbingEmotion: shot.dubbingEmotion, speaker: shot.speaker, shotDuration: shot.shotDuration, cameraMovement: shot.cameraMovement })
 }
 
-// 🔴 新增：获取历史图片数组
+// 🔴 新增：获取历史图片数组（兼容新旧格式）
 function getHistoryImages(shot: StoryboardShot): string[] {
   try {
-    return JSON.parse(shot.history || '[]')
+    const history = shot.history || '[]'
+    const parsed = JSON.parse(history)
+    // 新格式：对象数组 [{fileName: "xxx", publicUrl: "..."}]
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object' && 'fileName' in parsed[0]) {
+      return parsed.map((h: any) => h.fileName)
+    }
+    // 旧格式：字符串数组 ["xxx", "yyy"]
+    return parsed
   } catch (e) {
     return []
   }

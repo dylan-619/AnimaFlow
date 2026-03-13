@@ -124,6 +124,20 @@
 5. **动作精简**：只保留核心动作，裁剪思维
 6. **总时长锚定为绝对约束**：不要超出时长承载力
 
+### 【关键】多人物场景规范
+**首帧状态和动作序列必须包含该镜头中所有角色**：
+- 如果镜头涉及多个角色同时出现（如对话场景），首帧描述和动作描述必须包含所有角色
+- 动作序列中要体现角色之间的互动
+- 禁止只描述单个角色的动作而忽略其他角色
+
+**示例**：
+❌ 错误：A young woman stands behind the counter wiping the coffee machine（缺少林晨）
+✅ 正确：A young woman stands behind the counter holding a coffee cup, a young man in a grey suit stands at the counter holding a briefcase, they look at each other
+
+**角色一致性**：
+- 角色名称和描述必须与资产设定保持一致
+- 服装、外貌描述必须一致
+
 ### 镜头语言（Seedance 支持的标准指令）
 - **运镜**：push in, pull out, pan left/right, tilt up/down, tracking shot, dolly, crane, orbit, zoom in/out
 - **景别**：close-up, medium shot, wide shot, extreme close-up, aerial shot, macro

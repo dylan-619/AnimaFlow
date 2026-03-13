@@ -180,6 +180,7 @@ export type TaskType =
     | 'storyboard_tts'
     | 'storyboard_inpaint'
     | 'video'
+    | 'video_generate'
     | 'video_mux'
     | 'composite';
 

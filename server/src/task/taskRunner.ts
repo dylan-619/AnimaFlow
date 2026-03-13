@@ -14,12 +14,12 @@ export function registerTaskHandler(type: TaskType, handler: TaskHandler) {
  * 🔴 新增：并行任务处理，批量生成优化。
  */
 class TaskRunner {
-    private queue: string[] = [];
+    private queue: number[] = [];
     private running = false;
 
     // 🔴 新增：并行配置
     private maxConcurrent = 3; // 最大并行任务数
-    private activeTasks = new Set<string>(); // 当前活跃任务集合
+    private activeTasks = new Set<number>(); // 当前活跃任务集合
 
     // 🔴 新增：重试配置
     private readonly MAX_RETRIES = 3; // 最大重试次数
@@ -30,7 +30,7 @@ class TaskRunner {
         'rate limit', '429', '503', '502', '500'
     ]; // 可重试的错误类型
 
-    async enqueue(taskId: string) {
+    async enqueue(taskId: number) {
         this.queue.push(taskId);
         if (!this.running) this.processNext();
     }
@@ -144,7 +144,7 @@ class TaskRunner {
      * 批量并行处理任务（新增）
      * 根据任务类型智能分配并行度
      */
-    async enqueueBatch(taskIds: string[], options?: { concurrency?: number }) {
+    async enqueueBatch(taskIds: number[], options?: { concurrency?: number }) {
         const { concurrency = this.maxConcurrent } = options || {};
         
         console.log(`[批量任务] 入队 ${taskIds.length} 个任务，并行度=${concurrency}`);
@@ -154,15 +154,16 @@ class TaskRunner {
         
         // 处理每组任务
         for (const [type, ids] of Object.entries(taskGroups)) {
+            const numIds = ids as number[]; // 类型断言
             // 图像生成和视频生成可并行
             const canParallel = ['storyboard_image', 'video_generate', 'asset_image'].includes(type);
-            
+
             if (canParallel) {
                 // 并行处理
-                await this.processParallel(ids, concurrency);
+                await this.processParallel(numIds, concurrency);
             } else {
                 // 串行处理
-                for (const id of ids) {
+                for (const id of numIds) {
                     await this.enqueue(id);
                     await this.waitForCompletion(id);
                 }
@@ -173,21 +174,21 @@ class TaskRunner {
     /**
      * 并行处理任务组（新增）
      */
-    private async processParallel(taskIds: string[], maxConcurrent: number) {
-        const batches: string[][] = [];
-        
+    private async processParallel(taskIds: number[], maxConcurrent: number) {
+        const batches: number[][] = [];
+
         // 分批次
         for (let i = 0; i < taskIds.length; i += maxConcurrent) {
             batches.push(taskIds.slice(i, i + maxConcurrent));
         }
-        
+
         console.log(`[并行处理] ${taskIds.length} 个任务分为 ${batches.length} 批次`);
-        
+
         // 逐批并行执行
         for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
             console.log(`[并行处理] 执行第 ${i + 1}/${batches.length} 批次，${batch.length} 个任务`);
-            
+
             // 并行执行当前批次
             const promises = batch.map(taskId => this.executeTask(taskId));
             await Promise.allSettled(promises);
@@ -197,7 +198,7 @@ class TaskRunner {
     /**
      * 执行单个任务（新增，从processNext中提取）
      */
-    private async executeTask(taskId: string): Promise<void> {
+    private async executeTask(taskId: number): Promise<void> {
         // 避免重复执行
         if (this.activeTasks.has(taskId)) {
             console.log(`[任务执行] 任务 ${taskId} 已在执行中，跳过`);
@@ -300,22 +301,22 @@ class TaskRunner {
     /**
      * 按任务类型分组（新增）
      */
-    private async groupTasksByType(taskIds: string[]): Promise<Record<string, string[]>> {
+    private async groupTasksByType(taskIds: number[]): Promise<Record<string, number[]>> {
         const tasks = await db('t_task').whereIn('id', taskIds).orderBy('priority', 'desc');
-        
-        const groups: Record<string, string[]> = {};
+
+        const groups: Record<string, number[]> = {};
         for (const task of tasks) {
             if (!groups[task.type]) groups[task.type] = [];
             groups[task.type].push(task.id);
         }
-        
+
         return groups;
     }
 
     /**
      * 等待任务完成（新增）
      */
-    private async waitForCompletion(taskId: string, timeout: number = 300000): Promise<void> {
+    private async waitForCompletion(taskId: number, timeout: number = 300000): Promise<void> {
         const startTime = Date.now();
         
         while (Date.now() - startTime < timeout) {
@@ -346,18 +347,18 @@ class TaskRunner {
         }
         
         // 创建批量任务记录
-        const taskIds: string[] = [];
+        const taskIds: number[] = [];
         for (const task of sortedTasks) {
-            const [inserted] = await db('t_task').insert({
+            const [id] = await db('t_task').insert({
                 projectId: task.projectId,
                 type: task.type,
                 input: JSON.stringify(task.input || {}),
                 status: 'pending',
                 priority: task.priority || 5,
                 createdAt: Date.now(),
-            }).returning('id');
-            
-            taskIds.push(inserted.id || inserted);
+            });
+
+            taskIds.push(id);
         }
         
         console.log(`[批量调度] 已调度 ${taskIds.length} 个任务，${Object.keys(groups).length} 种类型`);

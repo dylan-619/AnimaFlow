@@ -86,10 +86,10 @@
         </el-form-item>
         <el-form-item label="视频比例">
           <el-radio-group v-model="form.videoRatio">
-            <el-radio-button label="16:9">16:9 横屏</el-radio-button>
-            <el-radio-button label="9:16">9:16 竖屏</el-radio-button>
-            <el-radio-button label="1:1">1:1 方形</el-radio-button>
-            <el-radio-button label="4:3">4:3 经典</el-radio-button>
+            <el-radio-button value="16:9">16:9 横屏</el-radio-button>
+            <el-radio-button value="9:16">9:16 竖屏</el-radio-button>
+            <el-radio-button value="1:1">1:1 方形</el-radio-button>
+            <el-radio-button value="4:3">4:3 经典</el-radio-button>
           </el-radio-group>
         </el-form-item>
       </el-form>

@@ -70,10 +70,18 @@ storyboardRouter.post('/api/storyboard/select-image', async (req: Request, res: 
             return;
         }
         
-        let historyArr: string[] = [];
+        let historyArr: any[] = [];
         try { historyArr = JSON.parse(shot.history || '[]'); } catch (e) { }
         
-        if (!historyArr.includes(filePath)) {
+        // 兼容新旧格式：新格式为对象数组[{fileName, publicUrl}]，旧格式为字符串数组
+        let isInHistory = false;
+        if (historyArr.length > 0 && typeof historyArr[0] === 'object' && 'fileName' in historyArr[0]) {
+            isInHistory = historyArr.some((h: any) => h.fileName === filePath);
+        } else {
+            isInHistory = historyArr.includes(filePath);
+        }
+        
+        if (!isInHistory) {
             res.json({ code: -1, msg: '该图片不在历史记录中' });
             return;
         }
@@ -403,7 +411,6 @@ export async function storyboardImageHandler(task: Task, updateProgress: (p: num
         return { count: 0, skipped: true };
     }
 
-    const polishPrompt = await getPrompt(db, 'storyboard_image');
     const project = await db('t_project').where('id', task.projectId).first();
 
     // 查询项目下所有资产（含无图片的，确保关联完整）
@@ -446,26 +453,12 @@ export async function storyboardImageHandler(task: Task, updateProgress: (p: num
 
         console.log(`[分镜图] S${shot.segmentIndex}-${shot.shotIndex} 关联资产(${matchedAssets.length}): ${matchedAssets.map((a: any) => `${a.name}(${a.type})`).join(', ') || '无'}`);
 
-        // 构建匹配到的资产描述，注入润色提示词以保持角色/场景/道具一致性
-        const assetsDesc = matchedAssets.length > 0
-            ? '\n相关资产描述（请严格按照以下描述绘制对应的角色外貌、场景环境或道具外观）：\n'
-            + matchedAssets.map((a: any) =>
-                `[${a.type === 'role' ? '角色' : a.type === 'scene' ? '场景' : '道具'}] ${a.name}: ${a.intro || ''}`
-            ).join('\n')
-            : '';
-
-        const styleInfo = project?.artStyle || '写实';
-        const styleGuideInfo = project?.styleGuide ? `\n视觉风格指引：${project.styleGuide}` : '';
-
-        // 1. 润色提示词（注入匹配到的资产描述 + 视觉风格指引）
-        const polished = await textGenerate([
-            { role: 'system', content: polishPrompt },
-            { role: 'user', content: `风格：${styleInfo}${styleGuideInfo}\n分镜描述：${shot.shotPrompt}${assetsDesc}\n\n【重要提取要求】\n请务必只描述该分镜首帧的静态视觉构图，不要包含人物的连续动作转移、时间推移或状态前后的变化描述。提示词应能够生成一张确定的定格画面。` },
-        ]);
+        // 🔴 优先使用 polishedPrompt（前端智能润色后的提示词），如果为空则使用 shotPrompt
+        const imagePrompt = shot.polishedPrompt || shot.shotPrompt || '';
 
         // 🔴 优化：增强参考图注入逻辑 - 智能权重控制和一致性验证
 
-        // 2. 收集匹配资产中有 OSS 公网 URL 的参考图，并按优先级排序
+        // 收集匹配资产中有 OSS 公网 URL 的参考图，并按优先级排序
         const assetsWithImages = matchedAssets.filter((a: any) => a.publicUrl);
 
         // 3. 根据资产类型分配参考图权重
@@ -512,8 +505,8 @@ export async function storyboardImageHandler(task: Task, updateProgress: (p: num
         };
         const [imgWidth, imgHeight] = dimensionMap[videoRatio] || [2560, 1440];
 
-        // 8. 生成图片（传入参考图 URL 和权重参数以保持视觉一致性）
-        const results = await imageGenerate(polished, {
+        // 生成图片（传入参考图 URL 和权重参数以保持视觉一致性）
+        const results = await imageGenerate(imagePrompt, {
             prefix: `storyboard_${shot.id}`,
             width: imgWidth,
             height: imgHeight,
