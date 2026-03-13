@@ -9,7 +9,7 @@ const router = Router();
 const VALID_TYPES: TaskType[] = [
     'storyline', 'outline', 'assets_extract', 'asset_image',
     'script', 'storyboard', 'storyboard_image', 'storyboard_tts',
-    'storyboard_inpaint', 'video', 'video_mux',
+    'storyboard_inpaint', 'video', 'video_mux', 'video_generate', 'composite',
 ];
 
 // 创建并执行任务

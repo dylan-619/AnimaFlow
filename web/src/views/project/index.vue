@@ -32,7 +32,7 @@
         <p class="card-intro">{{ p.intro || '暂无简介' }}</p>
         <div class="card-tags">
           <el-tag v-if="p.type" size="small" type="info">{{ p.type }}</el-tag>
-          <el-tag v-if="p.artStyle" size="small" type="warning">{{ p.artStyle }}</el-tag>
+          <el-tag v-for="(style, idx) in artStyleList(p.artStyle)" :key="idx" size="small" type="warning" class="art-style-tag">{{ style }}</el-tag>
         </div>
       </div>
     </div>
@@ -49,10 +49,37 @@
           </el-select>
         </el-form-item>
         <el-form-item label="美术风格">
-          <el-select v-model="form.artStyle" placeholder="选择风格" filterable allow-create>
-            <el-option v-for="s in ['写实', '动漫', '暗黑哥特动漫', '国风水墨', '赛博朋克', '油画', '3D渲染']" :key="s" :label="s"
-              :value="s" />
+          <el-select
+            v-model="form.artStyle"
+            placeholder="选择风格"
+            filterable
+            allow-create
+            multiple
+            collapse-tags
+          >
+            <el-option-group label="日系动漫">
+              <el-option label="日系动漫" value="动漫" />
+              <el-option label="暗黑哥特动漫" value="暗黑哥特动漫" />
+              <el-option label="赛璐璃风格" value="赛璐璃" />
+            </el-option-group>
+            <el-option-group label="国风风格">
+              <el-option label="国风水墨" value="国风水墨" />
+              <el-option label="古风插画" value="古风插画" />
+            </el-option-group>
+            <el-option-group label="特色风格">
+              <el-option label="赛博朋克" value="赛博朋克" />
+              <el-option label="蒸汽朋克" value="蒸汽朋克" />
+              <el-option label="废土风格" value="废土风格" />
+              <el-option label="3D渲染" value="3D渲染" />
+            </el-option-group>
+            <el-option-group label="艺术风格">
+              <el-option label="油画质感" value="油画" />
+              <el-option label="水彩风格" value="水彩" />
+              <el-option label="像素风格" value="像素" />
+              <el-option label="手绘涂鸦" value="手绘涂鸦" />
+            </el-option-group>
           </el-select>
+          <div class="form-tip">支持选择多个风格或输入自定义风格，逗号分隔</div>
         </el-form-item>
         <el-form-item label="视觉风格">
           <el-input v-model="form.styleGuide" type="textarea" :rows="4" placeholder="详细视觉风格指引（色调、光影、镜头风格、特效标识等）" />
@@ -61,6 +88,8 @@
           <el-radio-group v-model="form.videoRatio">
             <el-radio-button label="16:9">16:9 横屏</el-radio-button>
             <el-radio-button label="9:16">9:16 竖屏</el-radio-button>
+            <el-radio-button label="1:1">1:1 方形</el-radio-button>
+            <el-radio-button label="4:3">4:3 经典</el-radio-button>
           </el-radio-group>
         </el-form-item>
       </el-form>
@@ -85,9 +114,15 @@ const appStore = useAppStore()
 const projects = ref<Project[]>([])
 const showCreate = ref(false)
 const editingProject = ref<Project | null>(null)
-const form = ref({ name: '', intro: '', type: '', artStyle: '动漫', styleGuide: '', videoRatio: '16:9' })
+const form = ref({ name: '', intro: '', type: '', artStyle: [] as string[], styleGuide: '', videoRatio: '16:9' })
 
 onMounted(loadProjects)
+
+function artStyleList(artStyle: string | null) {
+  if (!artStyle) return []
+  // 支持逗号分隔的字符串和数组格式
+  return Array.isArray(artStyle) ? artStyle : artStyle.split(',').map(s => s.trim()).filter(Boolean)
+}
 
 async function loadProjects() {
   const res: any = await api.post('/api/project/list')
@@ -102,7 +137,7 @@ function enterProject(p: Project) {
 function handleCommand(cmd: string, p: Project) {
   if (cmd === 'edit') {
     editingProject.value = p
-    form.value = { name: p.name, intro: p.intro || '', type: p.type || '', artStyle: p.artStyle || '', styleGuide: p.styleGuide || '', videoRatio: p.videoRatio || '16:9' }
+    form.value = { name: p.name, intro: p.intro || '', type: p.type || '', artStyle: artStyleList(p.artStyle), styleGuide: p.styleGuide || '', videoRatio: p.videoRatio || '16:9' }
     showCreate.value = true
   } else if (cmd === 'delete') {
     ElMessageBox.confirm('确定删除该项目及所有数据？', '删除确认', { type: 'warning' }).then(async () => {
@@ -115,16 +150,21 @@ function handleCommand(cmd: string, p: Project) {
 
 async function submitProject() {
   if (!form.value.name) { ElMessage.warning('请输入项目名称'); return }
+  const submitData = {
+    ...form.value,
+    // 将数组转为逗号分隔的字符串存储
+    artStyle: Array.isArray(form.value.artStyle) ? form.value.artStyle.join(',') : form.value.artStyle
+  }
   if (editingProject.value) {
-    await api.post('/api/project/update', { id: editingProject.value.id, ...form.value })
+    await api.post('/api/project/update', { id: editingProject.value.id, ...submitData })
     ElMessage.success('已更新')
   } else {
-    await api.post('/api/project/create', form.value)
+    await api.post('/api/project/create', submitData)
     ElMessage.success('已创建')
   }
   showCreate.value = false
   editingProject.value = null
-  form.value = { name: '', intro: '', type: '', artStyle: '动漫', styleGuide: '', videoRatio: '16:9' }
+  form.value = { name: '', intro: '', type: '', artStyle: [], styleGuide: '', videoRatio: '16:9' }
   loadProjects()
 }
 </script>
@@ -184,12 +224,24 @@ async function submitProject() {
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
 .card-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+.art-style-tag {
+  max-width: none;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
 }
 </style>

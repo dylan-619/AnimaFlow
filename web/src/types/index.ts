@@ -6,6 +6,7 @@ export interface Project {
     intro: string | null
     type: string | null
     artStyle: string | null
+    styleGuide: string | null
     videoRatio: string
     createTime: number | null
     novelCount?: number

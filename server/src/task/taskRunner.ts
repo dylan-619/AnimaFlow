@@ -155,7 +155,7 @@ class TaskRunner {
         // 处理每组任务
         for (const [type, ids] of Object.entries(taskGroups)) {
             // 图像生成和视频生成可并行
-            const canParallel = ['storyboard_image', 'video_generate', 'assets_image'].includes(type);
+            const canParallel = ['storyboard_image', 'video_generate', 'asset_image'].includes(type);
             
             if (canParallel) {
                 // 并行处理

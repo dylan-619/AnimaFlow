@@ -288,7 +288,7 @@ export async function assetImageHandler(task: Task, updateProgress: (p: number) 
                 // 转换旧格式
                 historyArr = oldHistory.map((h: any) => ({ 
                     fileName: typeof h === 'string' ? h : h.fileName || '', 
-                    publicUrl: typeof h === 'string' ? item.publicUrl : (h.publicUrl || null) 
+                    publicUrl: typeof h === 'string' ? null : (h.publicUrl || null) 
                 }));
             }
         }

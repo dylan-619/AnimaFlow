@@ -197,7 +197,7 @@ export async function batchGenerateAssetImages(
 
         const [task] = await db('t_task').insert({
             projectId,
-            type: 'assets_image',
+            type: 'asset_image',
             input: JSON.stringify({ 
                 assetIds: batch.map(a => a.id) 
             }),

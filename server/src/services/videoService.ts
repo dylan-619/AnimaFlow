@@ -215,6 +215,11 @@ export async function batchVideoHandler(task: Task, updateProgress: (p: number) 
         return { count: 0, skipped: true };
     }
 
+    // 查询项目配置获取视频比例
+    const project = await db('t_project').where('id', task.projectId).first();
+    const videoRatio = project?.videoRatio || '16:9';
+    console.log(`[批量视频] 使用视频比例: ${videoRatio}`);
+
     let successCount = 0;
     let failCount = 0;
 
@@ -231,7 +236,7 @@ export async function batchVideoHandler(task: Task, updateProgress: (p: number) 
                 prompt: shot.videoPrompt || shot.shotPrompt || '',
                 imageFileNames,
                 duration: shot.shotDuration || 5,
-                ratio: '16:9',
+                ratio: videoRatio,
                 generateAudio: false,
             });
 

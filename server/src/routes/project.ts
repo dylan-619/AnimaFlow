@@ -95,21 +95,38 @@ router.post('/api/project/delete', async (req: Request, res: Response) => {
         if (!id) { res.json({ code: -1, msg: '缺少项目 ID' }); return; }
 
         // 级联删除相关的子表数据，确保项目删除干净
-        // 现有的表：novel, storyline, outline, script, assets, storyboard, videoConfig, video, task
+        // 表结构关系：
+        // t_novel -> projectId
+        // t_storyline -> projectId
+        // t_outline -> projectId
+        // t_script -> projectId
+        // t_assets -> projectId
+        // t_storyboard -> projectId
+        // t_videoConfig -> projectId
+        // t_task -> projectId
+        // t_video -> configId (通过 t_videoConfig.scriptId 关联)
+        // t_prompts -> 全局表，无 projectId，不需要删除
 
-        // 1. 删除直接关联 projectId 的大部分子表
+        // 1. 删除直接关联 projectId 的子表
         const tablesWithProjectId = [
             't_novel', 't_storyline', 't_outline', 't_script',
-            't_assets', 't_storyboard', 't_videoConfig', 't_task'
+            't_assets', 't_storyboard', 't_task'
         ];
         for (const table of tablesWithProjectId) {
             await db(table).where('projectId', id).del();
         }
 
-        // 2. 特殊外键层级，如基于 project 产生的 prompts 可能需要隔离清理，但这里仅清关联
-        await db('t_prompts').where('projectId', id).del();
+        // 2. 删除 t_videoConfig (有 projectId)
+        const videoConfigs = await db('t_videoConfig').where('projectId', id).select('id');
+        if (videoConfigs.length > 0) {
+            const configIds = videoConfigs.map((c: any) => c.id);
+            // 2.1 删除关联的 t_video 记录
+            await db('t_video').whereIn('configId', configIds).del();
+            // 2.2 删除 t_videoConfig 记录
+            await db('t_videoConfig').where('projectId', id).del();
+        }
 
-        // 3. 最后删除项目本身
+        // 3. 删除项目本身
         await db('t_project').where('id', id).del();
 
         res.json({ code: 0 });
