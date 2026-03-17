@@ -152,7 +152,7 @@ videoRouter.post('/api/video/polishPrompt', async (req: Request, res: Response) 
 
         // 使用 shotAction（动作序列）而非 shotPrompt（静态首帧）
         const actionDesc = shot.shotAction || shot.shotPrompt || '';
-        const cameraDesc = shot.cameraMovement ? `\n运镜指令：${shot.cameraMovement}` : '';
+        const cameraDesc = shot.cameraMovement ? `\n运镜镜令：${shot.cameraMovement}` : '';
 
         const polished = await textGenerate([
             { role: 'system', content: videoPromptTemplate },
@@ -164,6 +164,91 @@ videoRouter.post('/api/video/polishPrompt', async (req: Request, res: Response) 
 
         res.json({ code: 0, data: { polishedPrompt: polished } });
     } catch (err: any) { res.json({ code: -1, msg: err.message }); }
+});
+
+// 🔴 新增：批量润色视频提示词接口
+videoRouter.post('/api/video/batchPolishPrompt', async (req: Request, res: Response) => {
+    try {
+        const { storyboardIds, concurrency = 3 } = req.body;
+        if (!storyboardIds?.length) {
+            res.json({ code: -1, msg: '请指定分镜 ID 列表' });
+            return;
+        }
+
+        const shots = await db('t_storyboard').whereIn('id', storyboardIds);
+        if (!shots || shots.length === 0) {
+            res.json({ code: -1, msg: '未找到分镜数据' });
+            return;
+        }
+
+        const videoPromptTemplate = await getPrompt(db, 'video_prompt');
+        const results: any[] = [];
+        const successCount = { value: 0 };
+        const failCount = { value: 0 };
+
+        // 并行处理函数
+        const processShot = async (shot: any) => {
+            try {
+                const project = await db('t_project').where('id', shot.projectId).first();
+
+                // 查询匹配的资产描述
+                const allAssets = await db('t_assets')
+                    .where('projectId', shot.projectId)
+                    .whereNotNull('filePath')
+                    .where('filePath', '!=', '');
+                const matchedAssets = allAssets.filter((a: any) => shot.shotPrompt?.includes(a.name));
+                const assetsDesc = matchedAssets.length > 0
+                    ? '\n相关角色/场景描述：\n'
+                    + matchedAssets.map((a: any) =>
+                        `[${a.type === 'role' ? '角色' : a.type === 'scene' ? '场景' : '道具'}] ${a.name}: ${a.intro || ''}`
+                    ).join('\n')
+                    : '';
+
+                const styleGuideInfo = project?.styleGuide ? `\n视觉风格指引：${project.styleGuide}` : '';
+                const actionDesc = shot.shotAction || shot.shotPrompt || '';
+                const cameraDesc = shot.cameraMovement ? `\n运镜指令：${shot.cameraMovement}` : '';
+
+                const polished = await textGenerate([
+                    { role: 'system', content: videoPromptTemplate },
+                    { role: 'user', content: `风格：${project?.artStyle || '写实'}${styleGuideInfo}\n镜头时长：${shot.shotDuration || 5}秒\n首帧静态描述：${shot.shotPrompt || ''}\n动作序列：${actionDesc}${cameraDesc}${assetsDesc}\n台词：${shot.dubbingText || '无'}` },
+                ]);
+
+                // 保存到分镜记录
+                await db('t_storyboard').where('id', shot.id).update({ videoPrompt: polished });
+
+                successCount.value++;
+                console.log(`[批量润色视频提示词] S${shot.segmentIndex}-${shot.shotIndex} 完成`);
+                return { id: shot.id, videoPrompt: polished, success: true };
+            } catch (e: any) {
+                failCount.value++;
+                console.error(`[批量润色视频提示词] S${shot.segmentIndex}-${shot.shotIndex} 失败:`, e.message);
+                return { id: shot.id, error: e.message, success: false };
+            }
+        };
+
+        // 并行处理，控制并发数
+        const chunks: any[][] = [];
+        for (let i = 0; i < shots.length; i += concurrency) {
+            chunks.push(shots.slice(i, i + concurrency));
+        }
+
+        for (const chunk of chunks) {
+            await Promise.all(chunk.map(processShot));
+        }
+
+        console.log(`[批量润色视频提示词] 完成: 成功 ${successCount.value}, 失败 ${failCount.value}`);
+        res.json({
+            code: 0,
+            data: {
+                results,
+                total: shots.length,
+                success: successCount.value,
+                failed: failCount.value
+            }
+        });
+    } catch (err: any) {
+        res.json({ code: -1, msg: err.message });
+    }
 });
 
 // 选择指定分镜的最佳视频（更新 selectedResultId）

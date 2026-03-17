@@ -2,6 +2,7 @@ import db from '../db/index.js';
 import { textGenerate } from '../ai/text.js';
 import { imageGenerate, editImage } from '../ai/image.js';
 import { getPrompt, extractJSON } from '../utils/helpers.js';
+import { validateStoryboard, getShotsNeedingFix } from '../utils/storyboardValidator.js';
 import type { Task } from '../types/index.js';
 import type { EditMode } from '../ai/image.js';
 import multer from 'multer';
@@ -149,6 +150,36 @@ storyboardRouter.post('/api/storyboard/matchAssets', async (req: Request, res: R
 
         res.json({ code: 0, data: { matched: merged } });
     } catch (err: any) { res.json({ code: -1, msg: err.message }); }
+});
+
+// 🔴 新增：质量检查接口
+storyboardRouter.post('/api/storyboard/validate', async (req: Request, res: Response) => {
+    try {
+        const { scriptId } = req.body;
+        if (!scriptId) {
+            res.json({ code: -1, msg: '请指定剧本 ID' });
+            return;
+        }
+
+        const shots = await db('t_storyboard').where('scriptId', scriptId).orderBy('segmentIndex').orderBy('shotIndex');
+
+        if (!shots || shots.length === 0) {
+            res.json({ code: -1, msg: '未找到分镜数据' });
+            return;
+        }
+
+        const result = validateStoryboard(shots);
+
+        res.json({
+            code: 0,
+            data: {
+                ...result,
+                shotsNeedingFix: getShotsNeedingFix(result.issues)
+            }
+        });
+    } catch (err: any) {
+        res.json({ code: -1, msg: err.message });
+    }
 });
 
 // 润色分镜提示词（不生成图片，仅返回润色结果）
@@ -332,6 +363,12 @@ export async function storyboardHandler(task: Task, updateProgress: (p: number) 
 
     // 构建分镜数据（不再拆解，保持完整性）
     const rows: any[] = [];
+    let globalShotIndex = 1; // 🔴 优化：全局连续分镜编号
+
+    // 🔴 优化：预先获取视频提示词模板
+    const videoPromptTemplate = await getPrompt(db, 'video_prompt');
+    // 使用已有的 styleHint 变量（在第298行定义）
+
     for (const seg of segList) {
         for (const shot of seg.shots || []) {
             // 校验 relatedAssets：只保留实际存在的资产名称
@@ -363,12 +400,35 @@ export async function storyboardHandler(task: Task, updateProgress: (p: number) 
                 }
             }
 
+            // 🔴 优化：自动生成视频提示词
+            let videoPrompt = '';
+            try {
+                const videoPromptInput = `
+风格：${styleHint}
+镜头时长：${shot.shotDuration || 5}秒
+首帧静态描述：${shot.shotPrompt || ''}
+动作序列：${shot.shotAction || ''}
+运镜指令：${shot.cameraMovement || ''}
+台词：${shot.dubbingText || '无'}
+                `.trim();
+
+                videoPrompt = await textGenerate([
+                    { role: 'system', content: videoPromptTemplate },
+                    { role: 'user', content: videoPromptInput }
+                ], { responseFormat: 'text' });
+
+                console.log(`[分镜生成] S${seg.segmentIndex}-${globalShotIndex} 视频提示词生成成功`);
+            } catch (e: any) {
+                console.error(`[分镜生成] S${seg.segmentIndex}-${globalShotIndex} 视频提示词生成失败:`, e.message);
+                videoPrompt = shot.shotPrompt || ''; // 失败时使用首帧提示词作为 fallback
+            }
+
             rows.push({
                 scriptId,
                 projectId: task.projectId,
                 segmentIndex: seg.segmentIndex,
                 segmentDesc: seg.segmentDesc || '',
-                shotIndex: shot.shotIndex,
+                shotIndex: globalShotIndex++, // 🔴 优化：使用全局连续编号
                 shotPrompt: shot.shotPrompt || '',
                 shotAction: shot.shotAction || '',
                 shotDuration: shot.shotDuration || 5,
@@ -378,6 +438,7 @@ export async function storyboardHandler(task: Task, updateProgress: (p: number) 
                 dubbingEmotion, // 🔴 自动匹配的情绪
                 speaker, // 🔴 说话者
                 relatedAssets: JSON.stringify(validRelated),
+                videoPrompt, // 🔴 优化：自动生成的视频提示词
             });
         }
     }
