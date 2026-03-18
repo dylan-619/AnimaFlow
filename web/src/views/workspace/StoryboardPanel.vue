@@ -357,7 +357,7 @@ async function generateTTS() {
   finally { genTTS.value = false }
 }
 
-// 🔴 新增：批量生成视频
+// 批量生成视频
 async function generateVideos() {
   genVideos.value = true
   try {
@@ -378,8 +378,8 @@ async function generateVideos() {
 
       ElMessage.info(`开始生成选中的 ${targetIds.length} 个分镜视频...`)
     } else {
-      // 普通模式：生成所有有图片的分镜
-      targetIds = shots.value.filter(s => s.filePath).map(s => s.id)
+      // 普通模式：生成所有有图片且无视频的分镜
+      targetIds = shots.value.filter(s => s.filePath && !s.videoPath).map(s => s.id)
 
       if (!targetIds.length) {
         ElMessage.info('没有需要生成视频的分镜（需先生成图片）')
@@ -387,38 +387,16 @@ async function generateVideos() {
       }
     }
 
-    // 调用后端批量生成视频接口
-    const res: any = await api.post('/api/batch/videos', {
-      projectId,
+    // 使用 taskStore 创建并等待批量视频生成任务
+    const taskId = await taskStore.createTask(projectId, 'video_generate', {
       storyboardIds: targetIds,
       skipExisting: !selectMode.value, // 批量选择模式下不跳过已有视频
-      concurrency: 2 // 视频生成并行度较低
     })
+    currentTaskId.value = taskId
+    await taskStore.waitForTask(taskId)
 
-    if (res.data?.taskIds?.length) {
-      ElMessage.success(`已创建 ${res.data.taskIds.length} 个视频生成任务`)
-      // 使用第一个任务ID启动轮询
-      currentTaskId.value = res.data.taskIds[0]
-      // 使用 taskStore 轮询已存在的任务
-      const taskId = res.data.taskIds[0].toString()
-      await taskStore.pollExistingTask(taskId)
-
-      // 等待任务完成后刷新数据
-      const checkComplete = () => {
-        const task = taskStore.getTask(taskId)
-        if (task?.status === 'completed') {
-          loadShots()
-          ElMessage.success('视频生成完成！')
-        } else if (task?.status === 'failed') {
-          ElMessage.error(task.error || '视频生成失败')
-        } else {
-          setTimeout(checkComplete, 2000)
-        }
-      }
-      checkComplete()
-    } else {
-      ElMessage.info(res.data?.message || '没有需要生成视频的分镜')
-    }
+    ElMessage.success('视频生成完成')
+    loadShots()
   } catch (e: any) {
     ElMessage.error(e.message || '批量生成视频失败')
   } finally {

@@ -273,11 +273,11 @@ videoRouter.post('/api/video/selectResult', async (req: Request, res: Response) 
 
 // ---------- 任务 Handler ----------
 
-// 🔴 新增：批量视频生成处理器（用于批量生成功能）
+// 🔴 批量视频生成处理器：串行为每个分镜执行单个视频生成任务
 export async function batchVideoHandler(task: Task, updateProgress: (p: number) => Promise<void>) {
     const input = JSON.parse(task.input || '{}');
     const { storyboardIds, skipExisting = true } = input;
-    
+
     if (!storyboardIds?.length) {
         throw new Error('请指定分镜 ID');
     }
@@ -288,13 +288,13 @@ export async function batchVideoHandler(task: Task, updateProgress: (p: number) 
     let query = db('t_storyboard')
         .whereIn('id', storyboardIds)
         .whereNotNull('filePath'); // 必须有图片
-    
+
     if (skipExisting) {
         query = query.whereNull('videoPath'); // 跳过已有视频的
     }
 
     const shots = await query;
-    
+
     if (shots.length === 0) {
         console.log(`[批量视频] 所有分镜已有视频，跳过生成`);
         return { count: 0, skipped: true };
@@ -315,40 +315,43 @@ export async function batchVideoHandler(task: Task, updateProgress: (p: number) 
 
             await updateProgress(Math.round((i / shots.length) * 100));
 
-            // 使用分镜已有的视频提示词（与单个生成逻辑一致）
-            const prompt = shot.videoPrompt || shot.shotPrompt || '';
-
-            // 生成视频（与单个生成逻辑保持一致：同时传入 imageFileNames 和 imageBase64）
-            const imageFileNames = [shot.filePath];
-            const imageBase64 = [readFileBase64(shot.filePath)];
-            const { externalTaskId } = await videoGenerate({
-                prompt,
-                imageFileNames,
-                imageBase64,
+            // 创建视频配置（模拟 VideoGeneratorModal 的 createConfig 逻辑）
+            const [configId] = await db('t_videoConfig').insert({
+                scriptId: shot.scriptId,
+                projectId: task.projectId,
+                storyboardId: shot.id,
+                mode: 'single',
+                startFrame: shot.filePath,
+                prompt: shot.videoPrompt || shot.shotPrompt || '',
                 duration: shot.shotDuration || 5,
                 ratio: videoRatio,
-                generateAudio: false,
+                draft: 0,
+                cameraFixed: 0,
+                audioEnabled: 0,
+                createTime: Date.now(),
             });
 
-            // 写入视频记录（批量生成使用 configId=0 表示无配置ID）
-            const insertResult = await db.raw(`
-                INSERT INTO t_video (configId, state, prompt, duration, taskId, scriptId, createTime)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                RETURNING id
-            `, [0, 0, shot.videoPrompt || shot.shotPrompt, shot.shotDuration || 5, externalTaskId, shot.scriptId, Date.now()]);
-            const videoId = insertResult.rows[0].id;
+            // 复用 videoHandler 的逻辑执行单个视频生成
+            const videoTask: Task = {
+                id: `batch-video-${Date.now()}-${i}`,
+                projectId: task.projectId,
+                type: 'video',
+                input: JSON.stringify({ videoConfigId: configId }),
+                status: 'pending',
+                progress: 0,
+                createdAt: Date.now(),
+            };
 
-            // 轮询等待视频生成完成（需要传入视频配置ID）
-            const videoUrl = await pollVideoTask(externalTaskId, 0); // 使用 0 表示批量生成的配置ID
-            const fileName = `video_${videoId}_${Date.now()}.mp4`;
-            await downloadFile(videoUrl, fileName);
+            const result = await videoHandler(videoTask, async (p) => {
+                // 更新整体进度：已完成比例 + 当前任务进度的增量
+                const progress = Math.round((i / shots.length) * 100 + (p / shots.length));
+                await updateProgress(progress);
+            });
 
-            console.log(`[批量视频] 分镜 S${shot.segmentIndex}-${shot.shotIndex} 视频下载完成: ${fileName}`);
+            // 更新分镜的 videoPath
+            await db('t_storyboard').where('id', shot.id).update({ videoPath: result.filePath });
 
-            // 更新视频记录和分镜的 videoPath
-            await db('t_video').where('id', videoId).update({ state: 1, filePath: fileName });
-            await db('t_storyboard').where('id', shot.id).update({ videoPath: fileName });
-            
+            console.log(`[批量视频] 分镜 S${shot.segmentIndex}-${shot.shotIndex} 完成: ${result.filePath}`);
             successCount++;
         } catch (err: any) {
             console.error(`[批量视频] 分镜 S${shot.segmentIndex}-${shot.shotIndex} 生成失败:`, err.message);

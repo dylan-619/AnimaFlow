@@ -80,7 +80,7 @@ export async function batchGenerateStoryboardImages(
 
 /**
  * 批量生成视频
- * 简化版本：参考批量生成图片的方式，逐个创建任务
+ * 创建单个批量任务，由任务处理器串行处理
  */
 export async function batchGenerateVideos(
     projectId: number,
@@ -90,9 +90,9 @@ export async function batchGenerateVideos(
         storyboardIds?: number[];
     }
 ) {
-    const { concurrency = 2, skipExisting = true, storyboardIds } = options || {};
+    const { skipExisting = true, storyboardIds } = options || {};
 
-    console.log(`[批量视频] 项目 ${projectId}, 并行度=${concurrency}, 跳过已存在=${skipExisting}`);
+    console.log(`[批量视频] 项目 ${projectId}, 跳过已存在=${skipExisting}`);
 
     // 获取待生成视频的分镜（需已有图片）
     let query = db('t_storyboard')
@@ -112,60 +112,36 @@ export async function batchGenerateVideos(
     if (shots.length === 0) {
         return {
             totalShots: 0,
-            batchCount: 0,
-            concurrency,
+            taskIds: [],
             message: '没有待生成视频的分镜',
         };
     }
 
     console.log(`[批量视频] 找到 ${shots.length} 个待生成视频`);
 
-    // 创建视频配置和任务（参考单个生成的方式）
-    const taskIds: string[] = [];
-    for (const shot of shots) {
-        // 先创建视频配置（参考 VideoGeneratorModal 中的 createConfig 逻辑）
-        const [configId] = await db('t_videoConfig').insert({
-            scriptId: shot.scriptId,
-            projectId,
-            storyboardId: shot.id,
-            mode: 'single',
-            startFrame: shot.filePath,
-            prompt: shot.videoPrompt || shot.shotPrompt || '',
-            duration: shot.shotDuration || 5,
-            ratio: null, // 使用项目默认值
-            draft: 0,
-            cameraFixed: 0,
-            audioEnabled: 0,
-            createTime: Date.now(),
-        });
+    // 创建单个批量任务（串行处理）
+    const taskId = uuid();
+    await db('t_task').insert({
+        id: taskId,
+        projectId,
+        type: 'video_generate',
+        input: JSON.stringify({
+            storyboardIds: shots.map(s => s.id),
+            skipExisting,
+        }),
+        status: 'pending',
+        priority: 5,
+        createdAt: Date.now(),
+    });
 
-        // 然后创建任务（参考单个生成中的 createTask 逻辑）
-        const taskId = uuid();
-        await db('t_task').insert({
-            id: taskId,
-            projectId,
-            type: 'video', // 使用 'video' 与单个生成一致
-            input: JSON.stringify({
-                videoConfigId: configId
-            }),
-            status: 'pending',
-            progress: 0,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-        });
+    // 入队单个任务
+    await taskRunner.enqueue(taskId);
 
-        // 立即入队（不批量）
-        taskRunner.enqueue(taskId);
-        taskIds.push(taskId);
-    }
-
-    console.log(`[批量视频] 已创建 ${taskIds.length} 个视频任务`);
+    console.log(`[批量视频] 已创建批量任务 ID: ${taskId}`);
 
     return {
         totalShots: shots.length,
-        batchCount: taskIds.length,
-        concurrency,
-        taskIds,
+        taskIds: [taskId],
     };
 }
 
