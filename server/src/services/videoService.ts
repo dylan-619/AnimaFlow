@@ -312,35 +312,37 @@ export async function batchVideoHandler(task: Task, updateProgress: (p: number) 
         const shot = shots[i];
         try {
             console.log(`[批量视频] 处理分镜 S${shot.segmentIndex}-${shot.shotIndex} (${i + 1}/${shots.length})`);
-            
+
             await updateProgress(Math.round((i / shots.length) * 100));
-            
-            // 生成视频
+
+            // 使用分镜已有的视频提示词（与单个生成逻辑一致）
+            const prompt = shot.videoPrompt || shot.shotPrompt || '';
+
+            // 生成视频（与单个生成逻辑保持一致：同时传入 imageFileNames 和 imageBase64）
             const imageFileNames = [shot.filePath];
+            const imageBase64 = [readFileBase64(shot.filePath)];
             const { externalTaskId } = await videoGenerate({
-                prompt: shot.videoPrompt || shot.shotPrompt || '',
+                prompt,
                 imageFileNames,
+                imageBase64,
                 duration: shot.shotDuration || 5,
                 ratio: videoRatio,
                 generateAudio: false,
             });
 
-            // 写入视频记录
-            const [videoId] = await db('t_video').insert({
-                configId: null, // 批量生成不需要 configId
-                state: 0,
-                prompt: shot.videoPrompt || shot.shotPrompt,
-                duration: shot.shotDuration || 5,
-                taskId: externalTaskId,
-                scriptId: shot.scriptId,
-                createTime: Date.now(),
-            });
+            // 写入视频记录（批量生成使用 configId=0 表示无配置ID）
+            const insertResult = await db.raw(`
+                INSERT INTO t_video (configId, state, prompt, duration, taskId, scriptId, createTime)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+            `, [0, 0, shot.videoPrompt || shot.shotPrompt, shot.shotDuration || 5, externalTaskId, shot.scriptId, Date.now()]);
+            const videoId = insertResult.rows[0].id;
 
-            // 轮询等待视频生成完成
-            const videoUrl = await pollVideoTask(externalTaskId);
+            // 轮询等待视频生成完成（需要传入视频配置ID）
+            const videoUrl = await pollVideoTask(externalTaskId, 0); // 使用 0 表示批量生成的配置ID
             const fileName = `video_${videoId}_${Date.now()}.mp4`;
             await downloadFile(videoUrl, fileName);
-            
+
             console.log(`[批量视频] 分镜 S${shot.segmentIndex}-${shot.shotIndex} 视频下载完成: ${fileName}`);
 
             // 更新视频记录和分镜的 videoPath

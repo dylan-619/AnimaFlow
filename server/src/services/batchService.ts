@@ -1,6 +1,7 @@
 import db from '../db/index.js';
 import { taskRunner } from '../task/taskRunner.js';
 import { Router, Request, Response } from 'express';
+import { v4 as uuid } from 'uuid';
 
 export const batchRouter = Router();
 
@@ -65,7 +66,7 @@ export async function batchGenerateStoryboardImages(
     }
 
     // 批量入队
-    await taskRunner.enqueueBatch(taskIds as number[], { concurrency });
+    await taskRunner.enqueueBatch(taskIds);
 
     console.log(`[批量分镜图] 已创建 ${taskIds.length} 个批量任务`);
 
@@ -79,6 +80,7 @@ export async function batchGenerateStoryboardImages(
 
 /**
  * 批量生成视频
+ * 简化版本：参考批量生成图片的方式，逐个创建任务
  */
 export async function batchGenerateVideos(
     projectId: number,
@@ -118,29 +120,46 @@ export async function batchGenerateVideos(
 
     console.log(`[批量视频] 找到 ${shots.length} 个待生成视频`);
 
-    // 创建批量任务（视频生成并行度较低，避免API限流）
-    const taskIds: number[] = [];
-    for (let i = 0; i < shots.length; i += concurrency) {
-        const batch = shots.slice(i, i + concurrency);
-
-        const [id] = await db('t_task').insert({
+    // 创建视频配置和任务（参考单个生成的方式）
+    const taskIds: string[] = [];
+    for (const shot of shots) {
+        // 先创建视频配置（参考 VideoGeneratorModal 中的 createConfig 逻辑）
+        const [configId] = await db('t_videoConfig').insert({
+            scriptId: shot.scriptId,
             projectId,
-            type: 'video_generate',
-            input: JSON.stringify({
-                storyboardIds: batch.map(s => s.id)
-            }),
-            status: 'pending',
-            priority: 8,
-            createdAt: Date.now(),
+            storyboardId: shot.id,
+            mode: 'single',
+            startFrame: shot.filePath,
+            prompt: shot.videoPrompt || shot.shotPrompt || '',
+            duration: shot.shotDuration || 5,
+            ratio: null, // 使用项目默认值
+            draft: 0,
+            cameraFixed: 0,
+            audioEnabled: 0,
+            createTime: Date.now(),
         });
 
-        taskIds.push(id);
+        // 然后创建任务（参考单个生成中的 createTask 逻辑）
+        const taskId = uuid();
+        await db('t_task').insert({
+            id: taskId,
+            projectId,
+            type: 'video', // 使用 'video' 与单个生成一致
+            input: JSON.stringify({
+                videoConfigId: configId
+            }),
+            status: 'pending',
+            progress: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+
+        // 立即入队（不批量）
+        taskRunner.enqueue(taskId);
+        taskIds.push(taskId);
     }
 
-    // 批量入队
-    await taskRunner.enqueueBatch(taskIds as number[], { concurrency });
-
-    console.log(`[批量视频] 已创建 ${taskIds.length} 个批量任务`);
+    console.log(`[批量视频] 已创建 ${taskIds.length} 个视频任务`);
 
     return {
         totalShots: shots.length,
@@ -163,21 +182,22 @@ export async function batchGenerateAssetImages(
 ) {
     const { concurrency = 3, skipExisting = true, assetIds } = options || {};
 
-    console.log(`[批量资产图] 项目 ${projectId}, 并行度=${concurrency}`);
+    console.log(`[批量资产图] 项目 ${projectId}, 并行度=${concurrency}, 跳过已存在=${skipExisting}`);
 
     // 获取待生成资产图
     let query = db('t_assets')
-        .where('projectId', projectId);
+        .where('projectId', projectId)
+        .whereNotNull('intro'); // 有描述的
 
     if (skipExisting) {
-        query = query.whereNull('publicUrl'); // 未生成图片
+        query = query.whereNull('filePath'); // 未生成图片的
     }
 
     if (assetIds && assetIds.length > 0) {
         query = query.whereIn('id', assetIds);
     }
 
-    const assets = await query;
+    const assets = await query.orderBy('createTime', 'desc');
 
     if (assets.length === 0) {
         return {
@@ -188,7 +208,7 @@ export async function batchGenerateAssetImages(
         };
     }
 
-    console.log(`[批量资产图] 找到 ${assets.length} 个待生成资产`);
+    console.log(`[批量资产图] 找到 ${assets.length} 个待生成资产图`);
 
     // 创建批量任务
     const taskIds: number[] = [];
@@ -202,7 +222,7 @@ export async function batchGenerateAssetImages(
                 assetIds: batch.map(a => a.id)
             }),
             status: 'pending',
-            priority: 4,
+            priority: 5,
             createdAt: Date.now(),
         });
 
@@ -210,7 +230,9 @@ export async function batchGenerateAssetImages(
     }
 
     // 批量入队
-    await taskRunner.enqueueBatch(taskIds as number[], { concurrency });
+    await taskRunner.enqueueBatch(taskIds);
+
+    console.log(`[批量资产图] 已创建 ${taskIds.length} 个批量任务`);
 
     return {
         totalAssets: assets.length,
@@ -220,89 +242,87 @@ export async function batchGenerateAssetImages(
     };
 }
 
-/**
- * 一键生成全流程
- */
-export async function oneClickGenerate(
-    projectId: number,
-    options?: {
-        concurrency?: number;
-        steps?: string[]; // ['outline', 'script', 'assets', 'storyboard', 'images', 'videos']
-    }
-) {
-    const { concurrency = 3, steps } = options || {};
+// 一键生成全流程
+batchRouter.post('/api/batch/oneClick', async (req: Request, res: Response) => {
+    try {
+        const { projectId, concurrency = 2 } = req.body;
+        if (!projectId) { res.json({ code: -1, msg: '缺少 projectId' }); return; }
 
-    console.log(`[一键生成] 项目 ${projectId}, 并行度=${concurrency}`);
-
-    const project = await db('t_project').where('id', projectId).first();
-    if (!project) {
-        throw new Error('项目不存在');
-    }
-
-    const tasks: any[] = [];
-    const taskOrder = steps || [
-        'outline',        // 1. 大纲
-        'script',         // 2. 剧本
-        'assets_extract', // 3. 资产提取
-        'assets_image',   // 4. 资产图
-        'storyboard',     // 5. 分镜
-        'storyboard_image', // 6. 分镜图
-        'video_prompt',   // 7. 视频提示词
-        'video_generate', // 8. 视频
-    ];
-
-    // 检查每一步是否已完成，创建待执行任务
-    for (let i = 0; i < taskOrder.length; i++) {
-        const step = taskOrder[i];
-        
-        // 检查是否已存在完成的任务
-        const existingTask = await db('t_task')
+        // 获取项目所有分镜
+        const shots = await db('t_storyboard')
             .where('projectId', projectId)
-            .where('type', step)
-            .where('status', 'completed')
-            .first();
+            .orderBy('segmentIndex')
+            .orderBy('shotIndex');
 
-        if (!existingTask) {
-            tasks.push({
-                projectId,
-                type: step,
-                input: JSON.stringify({ projectId }),
-                priority: 10 - i, // 越早的优先级越高
-            });
+        if (!shots || shots.length === 0) {
+            res.json({ code: -1, msg: '该项目没有分镜' });
+            return;
         }
+
+        console.log(`[一键生成] 开始一键生成，共 ${shots.length} 个分镜`);
+
+        // 创建任务队列（按依赖顺序）
+        const tasks: any[] = [];
+
+        // 1. 大纲生成
+        tasks.push({ type: 'outline', priority: 1 });
+
+        // 2. 剧本生成
+        tasks.push({ type: 'script', priority: 2 });
+
+        // 3. 资产提取
+        tasks.push({ type: 'assets_extract', priority: 3 });
+
+        // 4. 资产图生成
+        const assetsToGenerate = shots.filter(s => s.relatedAssets && JSON.parse(s.relatedAssets || '[]').length > 0);
+        if (assetsToGenerate.length > 0) {
+            tasks.push({ type: 'asset_image', priority: 4 });
+        }
+
+        // 5. 分镜生成
+        tasks.push({ type: 'storyboard', priority: 5 });
+
+        // 6. 分镜图生成
+        const shotsToGenerateImages = shots.filter(s => !s.filePath);
+        if (shotsToGenerateImages.length > 0) {
+            tasks.push({ type: 'storyboard_image', priority: 6 });
+        }
+
+        // 7. 视频提示词
+        const shotsToGeneratePrompts = shots.filter(s => !s.videoPrompt);
+        if (shotsToGeneratePrompts.length > 0) {
+            tasks.push({ type: 'video_prompt', priority: 7 });
+        }
+
+        // 8. 视频生成
+        const shotsToGenerateVideos = shots.filter(s => s.filePath && !s.videoPath);
+        if (shotsToGenerateVideos.length > 0) {
+            tasks.push({ type: 'video_generate', priority: 8 });
+        }
+
+        // 使用 taskRunner 的批量调度功能
+        const result = await taskRunner.scheduleBatchTasks(tasks);
+
+        res.json({
+            code: 0,
+            data: {
+                totalShots: shots.length,
+                scheduled: result.scheduled,
+                batches: result.batches,
+                message: '一键生成任务已创建',
+            },
+        });
+    } catch (err: any) {
+        console.error('[一键生成] 错误:', err);
+        res.json({ code: -1, msg: err.message });
     }
-
-    if (tasks.length === 0) {
-        return {
-            message: '所有步骤已完成',
-            tasksCreated: 0,
-        };
-    }
-
-    // 按依赖关系排序并调度
-    const result = await taskRunner.scheduleBatchTasks(tasks);
-
-    console.log(`[一键生成] 已调度 ${result.scheduled} 个任务`);
-
-    return {
-        message: '一键生成已启动',
-        tasksCreated: result.scheduled,
-        batches: result.batches,
-        steps: taskOrder.filter(s => tasks.some(t => t.type === s)),
-    };
-}
-
-// ==================== 路由接口 ====================
+});
 
 // 批量生成分镜图
 batchRouter.post('/api/batch/storyboardImages', async (req: Request, res: Response) => {
     try {
         const { projectId, concurrency, skipExisting, storyboardIds } = req.body;
-        const result = await batchGenerateStoryboardImages(projectId, { 
-            concurrency, 
-            skipExisting, 
-            storyboardIds 
-        });
+        const result = await batchGenerateStoryboardImages(projectId, { concurrency, skipExisting, storyboardIds });
         res.json({ code: 0, data: result });
     } catch (err: any) {
         console.error('[批量分镜图] 错误:', err);
@@ -314,11 +334,7 @@ batchRouter.post('/api/batch/storyboardImages', async (req: Request, res: Respon
 batchRouter.post('/api/batch/videos', async (req: Request, res: Response) => {
     try {
         const { projectId, concurrency, skipExisting, storyboardIds } = req.body;
-        const result = await batchGenerateVideos(projectId, { 
-            concurrency, 
-            skipExisting, 
-            storyboardIds 
-        });
+        const result = await batchGenerateVideos(projectId, { concurrency, skipExisting, storyboardIds });
         res.json({ code: 0, data: result });
     } catch (err: any) {
         console.error('[批量视频] 错误:', err);
@@ -330,26 +346,10 @@ batchRouter.post('/api/batch/videos', async (req: Request, res: Response) => {
 batchRouter.post('/api/batch/assetImages', async (req: Request, res: Response) => {
     try {
         const { projectId, concurrency, skipExisting, assetIds } = req.body;
-        const result = await batchGenerateAssetImages(projectId, { 
-            concurrency, 
-            skipExisting, 
-            assetIds 
-        });
+        const result = await batchGenerateAssetImages(projectId, { concurrency, skipExisting, assetIds });
         res.json({ code: 0, data: result });
     } catch (err: any) {
         console.error('[批量资产图] 错误:', err);
-        res.json({ code: -1, msg: err.message });
-    }
-});
-
-// 一键生成
-batchRouter.post('/api/batch/oneClick', async (req: Request, res: Response) => {
-    try {
-        const { projectId, concurrency, steps } = req.body;
-        const result = await oneClickGenerate(projectId, { concurrency, steps });
-        res.json({ code: 0, data: result });
-    } catch (err: any) {
-        console.error('[一键生成] 错误:', err);
         res.json({ code: -1, msg: err.message });
     }
 });

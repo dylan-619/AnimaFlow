@@ -363,30 +363,30 @@ async function generateVideos() {
   try {
     // 如果在选择模式下，只生成选中的分镜；否则生成所有需要的分镜
     let targetIds: number[]
-    
+
     if (selectMode.value && selectedIds.value.length > 0) {
       // 批量选择模式：生成选中的分镜（需要有图片）
       targetIds = selectedIds.value.filter(id => {
         const shot = shots.value.find(s => s.id === id)
         return shot && shot.filePath // 需要有图片才能生成视频
       })
-      
+
       if (!targetIds.length) {
         ElMessage.info('选中的分镜需要先生成图片')
         return
       }
-      
+
       ElMessage.info(`开始生成选中的 ${targetIds.length} 个分镜视频...`)
     } else {
       // 普通模式：生成所有有图片的分镜
       targetIds = shots.value.filter(s => s.filePath).map(s => s.id)
-      
+
       if (!targetIds.length) {
         ElMessage.info('没有需要生成视频的分镜（需先生成图片）')
         return
       }
     }
-    
+
     // 调用后端批量生成视频接口
     const res: any = await api.post('/api/batch/videos', {
       projectId,
@@ -394,11 +394,28 @@ async function generateVideos() {
       skipExisting: !selectMode.value, // 批量选择模式下不跳过已有视频
       concurrency: 2 // 视频生成并行度较低
     })
-    
+
     if (res.data?.taskIds?.length) {
       ElMessage.success(`已创建 ${res.data.taskIds.length} 个视频生成任务`)
-      // 监听第一个任务的状态
+      // 使用第一个任务ID启动轮询
       currentTaskId.value = res.data.taskIds[0]
+      // 使用 taskStore 轮询已存在的任务
+      const taskId = res.data.taskIds[0].toString()
+      await taskStore.pollExistingTask(taskId)
+
+      // 等待任务完成后刷新数据
+      const checkComplete = () => {
+        const task = taskStore.getTask(taskId)
+        if (task?.status === 'completed') {
+          loadShots()
+          ElMessage.success('视频生成完成！')
+        } else if (task?.status === 'failed') {
+          ElMessage.error(task.error || '视频生成失败')
+        } else {
+          setTimeout(checkComplete, 2000)
+        }
+      }
+      checkComplete()
     } else {
       ElMessage.info(res.data?.message || '没有需要生成视频的分镜')
     }

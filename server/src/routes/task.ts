@@ -65,6 +65,31 @@ router.post('/api/task/status', async (req: Request, res: Response) => {
     }
 });
 
+// 查询任务状态 (GET 方法，用于前端轮询）
+router.get('/api/task/status', async (req: Request, res: Response) => {
+    try {
+        const { taskId } = req.query;
+        if (!taskId) { res.json({ code: -1, msg: '缺少 taskId' }); return; }
+
+        const task = await db('t_task').where('id', taskId).first();
+        if (!task) { res.json({ code: -1, msg: '任务不存在' }); return; }
+
+        res.json({
+            code: 0,
+            data: {
+                id: task.id,
+                type: task.type,
+                status: task.status,
+                progress: task.progress,
+                output: task.output ? JSON.parse(task.output) : null,
+                error: task.error,
+            },
+        });
+    } catch (err: any) {
+        res.json({ code: -1, msg: err.message });
+    }
+});
+
 // 项目任务列表
 router.post('/api/task/list', async (req: Request, res: Response) => {
     try {

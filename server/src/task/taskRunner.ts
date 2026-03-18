@@ -30,8 +30,8 @@ class TaskRunner {
         'rate limit', '429', '503', '502', '500'
     ]; // 可重试的错误类型
 
-    async enqueue(taskId: number) {
-        this.queue.push(taskId);
+    async enqueue(taskId: number | string) {
+        this.queue.push(taskId as any);
         if (!this.running) this.processNext();
     }
 
@@ -144,30 +144,59 @@ class TaskRunner {
      * 批量并行处理任务（新增）
      * 根据任务类型智能分配并行度
      */
-    async enqueueBatch(taskIds: number[], options?: { concurrency?: number }) {
-        const { concurrency = this.maxConcurrent } = options || {};
-        
-        console.log(`[批量任务] 入队 ${taskIds.length} 个任务，并行度=${concurrency}`);
-        
-        // 按任务类型分组
-        const taskGroups = await this.groupTasksByType(taskIds);
-        
-        // 处理每组任务
-        for (const [type, ids] of Object.entries(taskGroups)) {
-            const numIds = ids as number[]; // 类型断言
-            // 图像生成和视频生成可并行
-            const canParallel = ['storyboard_image', 'video_generate', 'asset_image'].includes(type);
+    async enqueueBatch(taskIds: (number | string)[], options?: { concurrency?: number }) {
+        try {
+            const { concurrency = this.maxConcurrent } = options || {};
 
-            if (canParallel) {
-                // 并行处理
-                await this.processParallel(numIds, concurrency);
-            } else {
-                // 串行处理
-                for (const id of numIds) {
-                    await this.enqueue(id);
-                    await this.waitForCompletion(id);
+            console.log(`[批量任务] 入队 ${taskIds.length} 个任务，并行度=${concurrency}`);
+            console.log(`[批量任务] 任务ID列表: [${taskIds.join(', ')}]`);
+
+            // 按任务类型分组
+            console.log(`[批量任务] 开始按类型分组任务...`);
+            const taskGroups = await this.groupTasksByType(taskIds);
+            const groupKeys = Object.keys(taskGroups);
+            console.log(`[批量任务] 分组结果: ${groupKeys.length} 个类型分组`);
+            console.log(`[批量任务] 分组详情: ${JSON.stringify(
+                Object.fromEntries(
+                    groupKeys.map(key => [key, taskGroups[key].length])
+                )
+            )}`);
+
+            if (groupKeys.length === 0) {
+                console.error(`[批量任务] 错误: 任务分组为空，所有任务可能无效`);
+                return;
+            }
+
+            // 处理每组任务
+            for (const [type, ids] of Object.entries(taskGroups)) {
+                const numIds = ids as number[];
+                console.log(`[批量任务] 处理任务组: type=${type}, count=${numIds.length}`);
+
+                // 图像生成和视频生成可并行
+                const canParallel = ['storyboard_image', 'video_generate', 'asset_image'].includes(type);
+                console.log(`[批量任务] 任务类型 ${type} 是否可并行: ${canParallel}`);
+
+                if (canParallel) {
+                    // 并行处理
+                    console.log(`[批量任务] 启动并行处理，任务数=${numIds.length}, 并行度=${concurrency}`);
+                    await this.processParallel(numIds, concurrency);
+                    console.log(`[批量任务] 并行处理完成: type=${type}`);
+                } else {
+                    // 串行处理
+                    console.log(`[批量任务] 启动串行处理，任务数=${numIds.length}`);
+                    for (const id of numIds) {
+                        await this.enqueue(id);
+                        await this.waitForCompletion(id);
+                    }
+                    console.log(`[批量任务] 串行处理完成: type=${type}`);
                 }
             }
+
+            console.log(`[批量任务] 所有任务组处理完成`);
+        } catch (err: any) {
+            console.error(`[批量任务] 处理失败:`, err);
+            console.error(`[批量任务] 错误堆栈:`, err.stack);
+            throw err;
         }
     }
 
@@ -175,6 +204,8 @@ class TaskRunner {
      * 并行处理任务组（新增）
      */
     private async processParallel(taskIds: number[], maxConcurrent: number) {
+        console.log(`[并行处理] 开始并行处理，任务数=${taskIds.length}, 并行度=${maxConcurrent}`);
+
         const batches: number[][] = [];
 
         // 分批次
@@ -188,11 +219,36 @@ class TaskRunner {
         for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
             console.log(`[并行处理] 执行第 ${i + 1}/${batches.length} 批次，${batch.length} 个任务`);
+            console.log(`[并行处理] 批次任务ID: [${batch.join(', ')}]`);
 
-            // 并行执行当前批次
-            const promises = batch.map(taskId => this.executeTask(taskId));
-            await Promise.allSettled(promises);
+            try {
+                // 并行执行当前批次
+                const promises = batch.map(taskId => {
+                    console.log(`[并行处理] 启动任务 ${taskId}`);
+                    return this.executeTask(taskId);
+                });
+
+                const results = await Promise.allSettled(promises);
+
+                // 统计结果
+                const fulfilled = results.filter(r => r.status === 'fulfilled').length;
+                const rejected = results.filter(r => r.status === 'rejected').length;
+
+                console.log(`[并行处理] 批次 ${i + 1} 完成: 成功 ${fulfilled}, 失败 ${rejected}`);
+
+                if (rejected > 0) {
+                    results.forEach((result, idx) => {
+                        if (result.status === 'rejected') {
+                            console.error(`[并行处理] 任务 ${batch[idx]} 失败:`, result.reason);
+                        }
+                    });
+                }
+            } catch (err: any) {
+                console.error(`[并行处理] 批次 ${i + 1} 执行异常:`, err);
+            }
         }
+
+        console.log(`[并行处理] 所有批次处理完成`);
     }
 
     /**
@@ -302,13 +358,37 @@ class TaskRunner {
      * 按任务类型分组（新增）
      */
     private async groupTasksByType(taskIds: number[]): Promise<Record<string, number[]>> {
+        console.log(`[任务分组] 开始分组，任务ID数量=${taskIds.length}`);
+        console.log(`[任务分组] 查询数据库获取任务详情...`);
+
+        // 等待一小段时间确保数据库事务提交（增加到 300ms）
+        await new Promise(resolve => setTimeout(resolve, 300));
+
         const tasks = await db('t_task').whereIn('id', taskIds).orderBy('priority', 'desc');
+        console.log(`[任务分组] 查询到 ${tasks.length} 个任务记录`);
+
+        if (tasks.length === 0) {
+            console.error(`[任务分组] 警告: 从数据库查询到0个任务记录`);
+            console.error(`[任务分组] 可能原因: 任务ID不存在或任务已删除`);
+        } else {
+            // 打印前3个任务的信息用于调试
+            console.log(`[任务分组] 任务样本 (前3个):`);
+            tasks.slice(0, 3).forEach((task, idx) => {
+                console.log(`  [${idx + 1}] id=${task.id}, type=${task.type}, status=${task.status}, priority=${task.priority}`);
+            });
+        }
 
         const groups: Record<string, number[]> = {};
-        for (const task of tasks) {
+        for (const task of
+ tasks) {
             if (!groups[task.type]) groups[task.type] = [];
             groups[task.type].push(task.id);
         }
+
+        const groupSummary = Object.fromEntries(
+            Object.entries(groups).map(([type, ids]) => [type, ids.length])
+        );
+        console.log(`[任务分组] 分组汇总: ${JSON.stringify(groupSummary)}`);
 
         return groups;
     }

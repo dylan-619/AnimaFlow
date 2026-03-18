@@ -64,9 +64,19 @@ export const useTaskStore = defineStore('task', () => {
         })
     }
 
+    // 轮询已存在的任务（用于批量生成的任务）
+    async function pollExistingTask(taskId: string) {
+        // 先添加到活跃任务中（初始状态）
+        activeTasks.value.set(taskId, {
+            id: taskId, type: 'video_generate', status: 'pending', progress: 0, output: null, error: null,
+        })
+        // 启动轮询
+        startPolling(taskId, 2000)
+    }
+
     function getTask(taskId: string): TaskInfo | undefined {
         return activeTasks.value.get(taskId)
     }
 
-    return { activeTasks, createTask, startPolling, stopPolling, waitForTask, getTask }
+    return { activeTasks, createTask, startPolling, stopPolling, waitForTask, getTask, pollExistingTask }
 })
